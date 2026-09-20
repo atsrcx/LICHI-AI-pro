@@ -1,0 +1,6 @@
+{
+  "name": "LICHI-AI",
+  "description": "LICHI-AI — a powerful, lightweight AI assistant client for Android.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

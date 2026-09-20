@@ -33,21 +33,21 @@ jobs:
       - name: Build release APK
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
         env:
-          RELEASE_STORE_PASSWORD: miniichat
-          RELEASE_KEY_ALIAS: miniichat
-          RELEASE_KEY_PASSWORD: miniichat
+          RELEASE_STORE_PASSWORD: lichiai
+          RELEASE_KEY_ALIAS: lichiai
+          RELEASE_KEY_PASSWORD: lichiai
 
       - name: Upload debug APK (CI artifact only)
         uses: actions/upload-artifact@v4
         with:
-          name: miniichat-debug
+          name: lichiai-debug
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
 
       - name: Upload release APKs (CI artifact)
         uses: actions/upload-artifact@v4
         with:
-          name: miniichat-release
+          name: lichiai-release
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 

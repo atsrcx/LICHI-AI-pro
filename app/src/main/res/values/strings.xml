@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">MiniiChat</string>
+    <string name="app_name">LICHI-AI</string>
     <string name="new_chat">New chat</string>
     <string name="send">Send</string>
     <string name="settings">Settings</string>
-    <string name="hint_input">Message MiniiChat…</string>
-    <string name="empty_title">Hi, I\'m MiniiChat</string>
-    <string name="empty_subtitle">An open-source LLM client. Bring your own keys.</string>
+    <string name="hint_input">Message LICHI-AI…</string>
+    <string name="empty_title">Hi, I\'m LICHI-AI</string>
+    <string name="empty_subtitle">A fast, lightweight AI assistant client. Bring your own keys.</string>
     <string name="copy">Copy</string>
     <string name="delete">Delete</string>
     <string name="rename">Rename</string>
@@ -47,7 +47,6 @@
     <string name="setting_language">Language</string>
     <string name="setting_language_system">System</string>
     <string name="setting_language_en">English</string>
-    <string name="setting_language_zh">中文</string>
     <string name="custom_headers">Custom HTTP headers</string>
     <string name="custom_headers_hint">Sent on every request to this provider</string>
     <string name="extra_body">Extra body params</string>
@@ -55,7 +54,7 @@
     <string name="key">Key</string>
     <string name="value">Value</string>
     <string name="add_row">Add row</string>
-    <string name="about_text">MiniiChat — an open-source LLM client. MIT licensed.</string>
+    <string name="about_text">LICHI-AI — a powerful, lightweight AI client.</string>
     <string name="error_no_provider">No provider configured. Add one in Settings.</string>
     <string name="stop">Stop</string>
     <string name="regenerate">Regenerate</string>

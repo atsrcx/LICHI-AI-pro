@@ -6,11 +6,11 @@ plugins {
 }
 
 android {
-    namespace = "com.miniichat"
+    namespace = "com.lichiai"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "com.miniichat"
+        applicationId = "com.aistudio.lichiai.aipx"
         minSdk = 26
         targetSdk = 34
         versionCode = 7
@@ -19,34 +19,30 @@ android {
     }
 
     signingConfigs {
+        create("debugConfig") {
+            storeFile = file("${rootDir}/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
         create("release") {
             val ksFile = file("release.keystore")
             if (ksFile.exists()) {
                 storeFile = ksFile
                 storePassword = (project.findProperty("RELEASE_STORE_PASSWORD") as String?)
-                    ?: System.getenv("RELEASE_STORE_PASSWORD") ?: "miniichat"
+                    ?: System.getenv("RELEASE_STORE_PASSWORD") ?: "lichiai"
                 keyAlias = (project.findProperty("RELEASE_KEY_ALIAS") as String?)
-                    ?: System.getenv("RELEASE_KEY_ALIAS") ?: "miniichat"
+                    ?: System.getenv("RELEASE_KEY_ALIAS") ?: "lichiai"
                 keyPassword = (project.findProperty("RELEASE_KEY_PASSWORD") as String?)
-                    ?: System.getenv("RELEASE_KEY_PASSWORD") ?: "miniichat"
+                    ?: System.getenv("RELEASE_KEY_PASSWORD") ?: "lichiai"
             }
-        }
-    }
-
-    splits {
-        abi {
-            isEnable = true
-            reset()
-            include("armeabi-v7a", "arm64-v8a")
-            isUniversalApk = false
         }
     }
 
     buildTypes {
         debug {
             isMinifyEnabled = false
-            applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            signingConfig = signingConfigs.getByName("debugConfig")
         }
         release {
             isMinifyEnabled = false
@@ -54,7 +50,7 @@ android {
             signingConfig = if (file("release.keystore").exists()) {
                 signingConfigs.getByName("release")
             } else {
-                signingConfigs.getByName("debug")
+                signingConfigs.getByName("debugConfig")
             }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -77,21 +73,6 @@ android {
     }
 
     sourceSets["main"].java.srcDirs("src/main/kotlin")
-
-    // Output: miniichat-1.0.1-arm64-v8a-release.apk / miniichat-1.0.1-armeabi-v7a-release.apk
-    applicationVariants.all {
-        val variant = this
-        outputs.all {
-            val output = this as? com.android.build.gradle.internal.api.BaseVariantOutputImpl
-                ?: return@all
-            val abiName = output.filters
-                .firstOrNull { it.filterType == com.android.build.OutputFile.ABI }
-                ?.identifier
-                ?: "universal"
-            output.outputFileName =
-                "miniichat-${variant.versionName}-${abiName}-${variant.buildType.name}.apk"
-        }
-    }
 
     packaging {
         resources {
