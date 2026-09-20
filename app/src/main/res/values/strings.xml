@@ -94,4 +94,12 @@
     <string name="edit">Edit</string>
     <string name="regenerate_from_here">Regenerate from here</string>
     <string name="advanced_options">Advanced</string>
+    <string name="voice_mode_title">Voice Conversation</string>
+    <string name="voice_settings_title">Voice Settings</string>
+    <string name="voice_state_idle">Ready</string>
+    <string name="voice_state_listening">Listening…</string>
+    <string name="voice_state_transcribing">Processing speech…</string>
+    <string name="voice_state_thinking">Thinking…</string>
+    <string name="voice_state_speaking">Speaking…</string>
+    <string name="voice_state_interrupted">Interrupted</string>
 </resources>

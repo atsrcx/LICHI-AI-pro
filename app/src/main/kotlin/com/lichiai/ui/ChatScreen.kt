@@ -42,6 +42,8 @@ import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.ExpandMore
+import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Refresh
@@ -92,7 +94,8 @@ fun ChatScreen(
     onEditMessage: (String, String) -> Unit = { _, _ -> },
     onNew: () -> Unit,
     onOpenSettings: () -> Unit,
-    onPickModel: () -> Unit
+    onPickModel: () -> Unit,
+    onOpenVoiceMode: () -> Unit = {}
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     var pendingAttachments by remember { mutableStateOf<List<com.lichiai.data.Attachment>>(emptyList()) }
@@ -125,7 +128,8 @@ fun ChatScreen(
             providerLabel = activeProvider?.name,
             onMenu = onMenu,
             onPickModel = onPickModel,
-            onNew = onNew
+            onNew = onNew,
+            onOpenVoiceMode = onOpenVoiceMode
         )
 
         if (messages.isEmpty()) {
@@ -232,7 +236,8 @@ private fun ChatTopBar(
     providerLabel: String?,
     onMenu: () -> Unit,
     onPickModel: () -> Unit,
-    onNew: () -> Unit
+    onNew: () -> Unit,
+    onOpenVoiceMode: () -> Unit = {}
 ) {
     Column(
         modifier = Modifier
@@ -240,7 +245,7 @@ private fun ChatTopBar(
             .background(MaterialTheme.colorScheme.background)
             .padding(top = WindowInsets.statusBars.asPaddingValues().calculateTopPadding())
     ) {
-        // Row 1: nav icons + title
+        // Row 1: nav icons + title + voice mode & new chat
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -258,6 +263,13 @@ private fun ChatTopBar(
                 color = MaterialTheme.colorScheme.onSurface,
                 maxLines = 1, overflow = TextOverflow.Ellipsis
             )
+            IconButton(onClick = onOpenVoiceMode) {
+                Icon(
+                    Icons.Default.Headphones,
+                    contentDescription = "Voice Conversation Mode",
+                    tint = MaterialTheme.colorScheme.primary
+                )
+            }
             IconButton(onClick = onNew) {
                 Icon(Icons.Default.Edit, contentDescription = "new chat",
                     tint = MaterialTheme.colorScheme.onSurface)

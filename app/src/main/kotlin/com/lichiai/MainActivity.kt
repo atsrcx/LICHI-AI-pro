@@ -19,22 +19,30 @@ class MainActivity : ComponentActivity() {
 
     override fun attachBaseContext(newBase: Context?) {
         if (newBase == null) { super.attachBaseContext(null); return }
-        // Read language synchronously from a tiny SharedPreferences mirror written by SettingsRepository.
-        val lang = newBase.getSharedPreferences("locale_cache", MODE_PRIVATE)
-            .getString("language", "system") ?: "system"
-        val ctx = if (lang == "system") newBase else applyLocale(newBase, lang)
-        super.attachBaseContext(ctx)
+        try {
+            // Read language synchronously from a tiny SharedPreferences mirror written by SettingsRepository.
+            val lang = newBase.getSharedPreferences("locale_cache", MODE_PRIVATE)
+                .getString("language", "system") ?: "system"
+            val ctx = if (lang == "system") newBase else applyLocale(newBase, lang)
+            super.attachBaseContext(ctx)
+        } catch (_: Exception) {
+            super.attachBaseContext(newBase)
+        }
     }
 
     private fun applyLocale(base: Context, lang: String): Context {
-        val locale = when (lang) {
-            "en" -> Locale.ENGLISH
-            else -> Locale.getDefault()
+        return try {
+            val locale = when (lang) {
+                "en" -> Locale.ENGLISH
+                else -> Locale.getDefault()
+            }
+            Locale.setDefault(locale)
+            val cfg = Configuration(base.resources.configuration)
+            cfg.setLocale(locale)
+            base.createConfigurationContext(cfg)
+        } catch (_: Exception) {
+            base
         }
-        Locale.setDefault(locale)
-        val cfg = Configuration(base.resources.configuration)
-        cfg.setLocale(locale)
-        return base.createConfigurationContext(cfg)
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {

@@ -27,10 +27,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.lichiai.ChatViewModel
 import com.lichiai.R
+import com.lichiai.calling.ui.CallDiagnosticsScreen
+import com.lichiai.calling.ui.CallDisambiguationDialog
 import com.lichiai.data.ProviderConfig
+import com.lichiai.ui.voice.VoiceConversationScreen
+import com.lichiai.ui.voice.VoiceSettingsScreen
 import kotlinx.coroutines.launch
 
-private enum class Screen { Chat, Settings, Providers, ProviderEdit, Assistants }
+private enum class Screen { Chat, Settings, Providers, ProviderEdit, Assistants, Voice, VoiceSettings, CallDiagnostics }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -40,6 +44,16 @@ fun AppRoot(vm: ChatViewModel) {
     var screen by rememberSaveable { mutableStateOf(Screen.Chat) }
     var showModelPicker by rememberSaveable { mutableStateOf(false) }
     var editingProvider by remember { mutableStateOf<ProviderConfig?>(null) }
+
+    val permissionLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.RequestMultiplePermissions()
+    ) { results ->
+        vm.callPermissionManager.checkPermissions()
+        if (results[android.Manifest.permission.READ_CONTACTS] == true) {
+            vm.contactRepository.registerContentObserver()
+            scope.launch { vm.contactRepository.loadAllContacts(forceRefresh = true) }
+        }
+    }
 
     androidx.activity.compose.BackHandler(enabled = drawerState.isOpen) {
         scope.launch { drawerState.close() }
@@ -59,6 +73,15 @@ fun AppRoot(vm: ChatViewModel) {
     androidx.activity.compose.BackHandler(enabled = screen == Screen.Assistants) {
         screen = Screen.Settings
     }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.Voice) {
+        screen = Screen.Chat
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.VoiceSettings) {
+        screen = Screen.Voice
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.CallDiagnostics) {
+        screen = Screen.Settings
+    }
 
     val conversations by vm.conversations.collectAsState()
     val activeId by vm.activeId.collectAsState()
@@ -73,6 +96,7 @@ fun AppRoot(vm: ChatViewModel) {
     val activeConv = conversations.firstOrNull { it.id == activeId }
     val activeProvider = providers.firstOrNull { it.id == settings.activeProviderId }
     val assistants by vm.assistants.collectAsState()
+    val disambiguationRequest by vm.universalCallEngine.activeDisambiguation.collectAsState()
 
     val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(toast) {
@@ -108,6 +132,14 @@ fun AppRoot(vm: ChatViewModel) {
                             onOpenSettings = {
                                 screen = Screen.Settings
                                 scope.launch { drawerState.close() }
+                            },
+                            onOpenVoiceMode = {
+                                screen = Screen.Voice
+                                scope.launch { drawerState.close() }
+                            },
+                            onOpenCallingSystem = {
+                                screen = Screen.CallDiagnostics
+                                scope.launch { drawerState.close() }
                             }
                         )
                     }
@@ -132,7 +164,8 @@ fun AppRoot(vm: ChatViewModel) {
                                 editingProvider = null
                                 screen = Screen.ProviderEdit
                             } else showModelPicker = true
-                        }
+                        },
+                        onOpenVoiceMode = { screen = Screen.Voice }
                     )
                 }
             }
@@ -144,7 +177,9 @@ fun AppRoot(vm: ChatViewModel) {
                     onBack = { screen = Screen.Chat },
                     onChange = { vm.updateSettings(it) },
                     onOpenProviders = { screen = Screen.Providers },
-                    onOpenAssistants = { screen = Screen.Assistants }
+                    onOpenAssistants = { screen = Screen.Assistants },
+                    onOpenVoiceSettings = { screen = Screen.VoiceSettings },
+                    onOpenCallDiagnostics = { screen = Screen.CallDiagnostics }
                 )
             }
             Screen.Assistants -> {
@@ -189,6 +224,33 @@ fun AppRoot(vm: ChatViewModel) {
                     }
                 )
             }
+            Screen.Voice -> {
+                val activeAssistant = assistants.firstOrNull { it.id == settings.activeAssistantId }
+                VoiceConversationScreen(
+                    orchestrator = vm.voiceOrchestrator,
+                    activeProvider = activeProvider,
+                    activeAssistant = activeAssistant,
+                    activeSettings = settings,
+                    onOpenVoiceSettings = { screen = Screen.VoiceSettings },
+                    onClose = { screen = Screen.Chat }
+                )
+            }
+            Screen.VoiceSettings -> {
+                VoiceSettingsScreen(
+                    voiceSettingsRepository = vm.voiceSettingsRepo,
+                    orchestrator = vm.voiceOrchestrator,
+                    onBack = { screen = Screen.Settings }
+                )
+            }
+            Screen.CallDiagnostics -> {
+                CallDiagnosticsScreen(
+                    viewModel = vm,
+                    onRequestPermissions = {
+                        permissionLauncher.launch(com.lichiai.calling.permission.CallPermissionManager.REQUIRED_PERMISSIONS)
+                    },
+                    onBack = { screen = Screen.Settings }
+                )
+            }
         }
 
         SnackbarHost(hostState = snackbar, modifier = Modifier.fillMaxSize())
@@ -201,6 +263,18 @@ fun AppRoot(vm: ChatViewModel) {
             activeModel = settings.activeModel,
             onPick = { pid, m -> vm.selectModel(pid, m) },
             onDismiss = { showModelPicker = false }
+        )
+    }
+
+    disambiguationRequest?.let { candidatesList ->
+        CallDisambiguationDialog(
+            candidates = candidatesList,
+            onSelectCandidate = { candidate, phone ->
+                vm.universalCallEngine.resolveDisambiguation(candidate, phone)
+            },
+            onDismiss = {
+                vm.universalCallEngine.cancelDisambiguation()
+            }
         )
     }
 
