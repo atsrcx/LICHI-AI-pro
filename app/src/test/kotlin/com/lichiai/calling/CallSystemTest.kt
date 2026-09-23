@@ -117,4 +117,50 @@ class CallSystemTest {
         assertEquals("Rahul Sharma", selected.contactName)
         assertEquals("9876543210", selected.phoneNumber.rawNumber)
     }
+
+    @Test
+    fun testCallDecisionIntentResolution() {
+        val actionResolver = com.lichiai.calling.intent.CallActionIntentResolver()
+        val ringingSession = com.lichiai.calling.state.CallSessionInfo(
+            callState = com.lichiai.calling.state.CallState.INCOMING_KNOWN,
+            callerName = "Rahul Sharma",
+            callerNumber = "+919876543210",
+            decisionQuestion = "Rahul Sharma ka call aa raha hai. Uthaun ya reject karun?",
+            isWaitingForDecision = true
+        )
+
+        // 1. Answer commands
+        val ans1 = actionResolver.resolve("utha lo", ringingSession)
+        assertTrue(ans1 is com.lichiai.calling.action.StructuredCallAction.AnswerCall)
+        assertEquals(false, (ans1 as com.lichiai.calling.action.StructuredCallAction.AnswerCall).enableSpeaker)
+
+        val ansSpeaker = actionResolver.resolve("speaker pe uthao", ringingSession)
+        assertTrue(ansSpeaker is com.lichiai.calling.action.StructuredCallAction.AnswerCall)
+        assertEquals(true, (ansSpeaker as com.lichiai.calling.action.StructuredCallAction.AnswerCall).enableSpeaker)
+
+        val ansHaan = actionResolver.resolve("haan", ringingSession)
+        assertTrue(ansHaan is com.lichiai.calling.action.StructuredCallAction.AnswerCall)
+
+        // 2. Reject commands
+        val rej1 = actionResolver.resolve("kaat do", ringingSession)
+        assertTrue(rej1 is com.lichiai.calling.action.StructuredCallAction.RejectCall)
+
+        val rej2 = actionResolver.resolve("reject kar do", ringingSession)
+        assertTrue(rej2 is com.lichiai.calling.action.StructuredCallAction.RejectCall)
+
+        // 3. Ambiguous Negative clarification
+        val neg = actionResolver.resolve("nahi", ringingSession)
+        assertTrue(neg is com.lichiai.calling.action.StructuredCallAction.ClarifyNegativeDecision)
+
+        // 4. Queries
+        val queryCaller = actionResolver.resolve("kaun hai?", ringingSession)
+        assertTrue(queryCaller is com.lichiai.calling.action.StructuredCallAction.QueryCallerIdentity)
+
+        val queryNumber = actionResolver.resolve("number kya hai?", ringingSession)
+        assertTrue(queryNumber is com.lichiai.calling.action.StructuredCallAction.QueryCallerNumber)
+
+        // 5. Cancel
+        val cancel = actionResolver.resolve("cancel", ringingSession)
+        assertTrue(cancel is com.lichiai.calling.action.StructuredCallAction.CancelDecision)
+    }
 }

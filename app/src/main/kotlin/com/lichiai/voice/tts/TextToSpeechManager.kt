@@ -8,6 +8,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import android.speech.tts.Voice
@@ -70,12 +71,17 @@ class TextToSpeechManager(
             isInitialized = true
             tts?.setOnUtteranceProgressListener(this)
             currentSettings?.let { applySettings(it) }
-            mainHandler.post { listener.onEngineInitialized(true) }
+            mainHandler.post {
+                listener.onEngineInitialized(true)
+                playNextInQueue()
+            }
         } else {
             isInitialized = false
             mainHandler.post { listener.onEngineInitialized(false) }
         }
     }
+
+    fun isReady(): Boolean = isInitialized && tts != null
 
     fun applySettings(settings: VoiceSettings) {
         currentSettings = settings
@@ -155,22 +161,25 @@ class TextToSpeechManager(
     }
 
     private fun playNextInQueue() {
-        val next = sentenceQueue.poll()
-        if (next == null) {
-            currentlyPlayingUtteranceId = null
-            releaseAudioFocus()
-            return
-        }
-
-        currentlyPlayingUtteranceId = next.first
-        val textToSpeak = next.second
-
         mainHandler.post {
             val engine = tts
             if (engine == null || !isInitialized) {
-                currentlyPlayingUtteranceId = null
+                // Not initialized yet; preserve queued sentences until onInit
                 return@post
             }
+            if (currentlyPlayingUtteranceId != null) {
+                return@post
+            }
+
+            val next = sentenceQueue.poll()
+            if (next == null) {
+                currentlyPlayingUtteranceId = null
+                releaseAudioFocus()
+                return@post
+            }
+
+            currentlyPlayingUtteranceId = next.first
+            val textToSpeak = next.second
 
             requestAudioFocus()
 
@@ -261,6 +270,7 @@ class TextToSpeechManager(
     // UtteranceProgressListener Callbacks
     override fun onStart(utteranceId: String?) {
         val id = utteranceId ?: return
+        Log.d("LICHI_VOICE", "[TTS] START utteranceId=$id")
         mainHandler.post {
             listener.onUtteranceStart(id)
         }
@@ -269,7 +279,9 @@ class TextToSpeechManager(
     override fun onDone(utteranceId: String?) {
         val id = utteranceId ?: return
         mainHandler.post {
+            currentlyPlayingUtteranceId = null
             val isQueueEmpty = sentenceQueue.isEmpty()
+            Log.d("LICHI_VOICE", "[TTS] FINISH utteranceId=$id isQueueEmpty=$isQueueEmpty")
             listener.onUtteranceDone(id, isQueueEmpty)
             playNextInQueue()
         }
@@ -278,7 +290,9 @@ class TextToSpeechManager(
     @Deprecated("Deprecated in Java")
     override fun onError(utteranceId: String?) {
         val id = utteranceId ?: return
+        Log.w("LICHI_VOICE", "[TTS] ERROR utteranceId=$id")
         mainHandler.post {
+            currentlyPlayingUtteranceId = null
             listener.onUtteranceError(id, "TTS playback error")
             playNextInQueue()
         }
@@ -286,7 +300,9 @@ class TextToSpeechManager(
 
     override fun onError(utteranceId: String?, errorCode: Int) {
         val id = utteranceId ?: return
+        Log.w("LICHI_VOICE", "[TTS] ERROR utteranceId=$id code=$errorCode")
         mainHandler.post {
+            currentlyPlayingUtteranceId = null
             listener.onUtteranceError(id, "TTS error code: $errorCode")
             playNextInQueue()
         }

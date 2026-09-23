@@ -7,8 +7,13 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.lichiai.voice.wakeword.WakePhraseConfig
+import com.lichiai.voice.wakeword.WakeWordSensitivity
+import com.lichiai.voice.wakeword.WakeWordSettings
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 private val Context.voiceDataStore by preferencesDataStore(name = "voice_settings")
 
@@ -59,6 +64,22 @@ class VoiceSettingsRepository(private val context: Context) {
 
         val BARGE_IN_ENABLED = booleanPreferencesKey("barge_in_enabled")
         val SAFE_ECHO_PROTECTION = booleanPreferencesKey("safe_echo_protection")
+
+        val WAKE_WORD_SETTINGS_JSON = stringPreferencesKey("wake_word_settings_json")
+    }
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+
+    val wakeWordSettings: Flow<WakeWordSettings> = context.voiceDataStore.data.map { prefs ->
+        val rawJson = prefs[Keys.WAKE_WORD_SETTINGS_JSON]
+        if (!rawJson.isNullOrBlank()) {
+            runCatching { json.decodeFromString<WakeWordSettings>(rawJson) }.getOrElse { WakeWordSettings() }
+        } else {
+            WakeWordSettings()
+        }
     }
 
     val settings: Flow<VoiceSettings> = context.voiceDataStore.data.map { prefs ->
@@ -146,6 +167,61 @@ class VoiceSettingsRepository(private val context: Context) {
     suspend fun updateSafeEchoProtection(enabled: Boolean) {
         context.voiceDataStore.edit { prefs ->
             prefs[Keys.SAFE_ECHO_PROTECTION] = enabled
+        }
+    }
+
+    suspend fun updateWakeWordSettings(transform: (WakeWordSettings) -> WakeWordSettings) {
+        context.voiceDataStore.edit { prefs ->
+            val current = prefs[Keys.WAKE_WORD_SETTINGS_JSON]?.let {
+                runCatching { json.decodeFromString<WakeWordSettings>(it) }.getOrNull()
+            } ?: WakeWordSettings()
+            val updated = transform(current)
+            prefs[Keys.WAKE_WORD_SETTINGS_JSON] = json.encodeToString(updated)
+        }
+    }
+
+    suspend fun updateWakeWordEnabled(enabled: Boolean) {
+        updateWakeWordSettings { it.copy(enabled = enabled) }
+    }
+
+    suspend fun updateWakeWordBackground(background: Boolean) {
+        updateWakeWordSettings { it.copy(backgroundListening = background) }
+    }
+
+    suspend fun updateWakeWordSensitivity(sensitivity: WakeWordSensitivity) {
+        updateWakeWordSettings { it.copy(sensitivity = sensitivity) }
+    }
+
+    suspend fun toggleWakeWordPhrase(phraseId: String, isEnabled: Boolean) {
+        updateWakeWordSettings { settings ->
+            val updatedPhrases = settings.phrases.map {
+                if (it.id == phraseId) it.copy(isEnabled = isEnabled) else it
+            }
+            settings.copy(phrases = updatedPhrases)
+        }
+    }
+
+    suspend fun updateWakeWordPhraseText(phraseId: String, newText: String) {
+        updateWakeWordSettings { settings ->
+            val updatedPhrases = settings.phrases.map {
+                if (it.id == phraseId) it.copy(phrase = newText) else it
+            }
+            settings.copy(phrases = updatedPhrases)
+        }
+    }
+
+    suspend fun addWakeWordPhrase(phraseText: String) {
+        if (phraseText.isBlank()) return
+        updateWakeWordSettings { settings ->
+            val newId = "wp_${System.currentTimeMillis()}"
+            val newPhrase = WakePhraseConfig(id = newId, phrase = phraseText.trim(), isEnabled = true)
+            settings.copy(phrases = settings.phrases + newPhrase)
+        }
+    }
+
+    suspend fun removeWakeWordPhrase(phraseId: String) {
+        updateWakeWordSettings { settings ->
+            settings.copy(phrases = settings.phrases.filterNot { it.id == phraseId })
         }
     }
 }

@@ -102,4 +102,9 @@
     <string name="voice_state_thinking">Thinking…</string>
     <string name="voice_state_speaking">Speaking…</string>
     <string name="voice_state_interrupted">Interrupted</string>
+    <string name="section_system_assistant">Default Digital Assistant</string>
+    <string name="system_assistant_title">Default Assistant App</string>
+    <string name="system_assistant_active">Active • Handles long press, gestures &amp; hotword</string>
+    <string name="system_assistant_inactive">Not active • Tap to set LICHI as default assistant</string>
+    <string name="system_assistant_role_tag">ROLE_ASSISTANT</string>
 </resources>

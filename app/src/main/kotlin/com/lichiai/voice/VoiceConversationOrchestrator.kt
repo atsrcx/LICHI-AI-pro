@@ -9,7 +9,11 @@ import com.lichiai.data.ProviderConfig
 import com.lichiai.data.SettingsRepository
 import com.lichiai.data.VoiceSettings
 import com.lichiai.data.VoiceSettingsRepository
+import com.lichiai.data.Conversation
+import com.lichiai.data.ConversationStore
+import com.lichiai.data.Message
 import com.lichiai.util.PromptVars
+import com.lichiai.util.newId
 import com.lichiai.voice.conversation.SentenceBuffer
 import com.lichiai.voice.conversation.VoiceSessionState
 import com.lichiai.voice.conversation.VoiceState
@@ -18,6 +22,7 @@ import com.lichiai.voice.stt.SpeechToTextListener
 import com.lichiai.voice.stt.SpeechToTextManager
 import com.lichiai.voice.tts.TextToSpeechListener
 import com.lichiai.voice.tts.TextToSpeechManager
+import com.lichiai.voice.wakeword.MicrophoneOwnershipCoordinator
 import com.lichiai.calling.engine.UniversalCallEngine
 import com.lichiai.calling.intent.CallAction
 import kotlinx.coroutines.CoroutineScope
@@ -32,13 +37,19 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class VoiceConversationOrchestrator(
     private val context: Context,
     private val llmClient: LlmClient,
     private val voiceSettingsRepository: VoiceSettingsRepository,
     private val settingsRepository: SettingsRepository,
-    private val callEngine: UniversalCallEngine? = null
+    private val callEngine: UniversalCallEngine? = null,
+    private val callActionExecutor: com.lichiai.calling.action.CallActionExecutor? = null,
+    private val callActionIntentResolver: com.lichiai.calling.intent.CallActionIntentResolver? = null,
+    private val conversationStore: ConversationStore? = null,
+    private val activeConversationIdProvider: () -> String? = { null },
+    private val onConversationIdChanged: (String) -> Unit = {}
 ) : SpeechToTextListener, TextToSpeechListener {
 
     private val orchestratorScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
@@ -77,9 +88,54 @@ class VoiceConversationOrchestrator(
                 currentAppSettings = s
             }
         }
+
+        orchestratorScope.launch {
+            _sessionState.collect { session ->
+                when (session.state) {
+                    VoiceState.LISTENING -> {
+                        com.lichiai.dynamicisland.LichiAssistantStateHub.onVoiceListening(
+                            partialTranscript = session.partialUserText,
+                            rms = session.currentRms
+                        )
+                    }
+                    VoiceState.TRANSCRIBING -> {
+                        com.lichiai.dynamicisland.LichiAssistantStateHub.updateState(
+                            uiState = com.lichiai.dynamicisland.LichiUiState.TRANSCRIBING,
+                            transcript = session.partialUserText
+                        )
+                    }
+                    VoiceState.THINKING -> {
+                        com.lichiai.dynamicisland.LichiAssistantStateHub.onVoiceThinking()
+                    }
+                    VoiceState.SPEAKING -> {
+                        com.lichiai.dynamicisland.LichiAssistantStateHub.onVoiceSpeaking(
+                            assistantText = session.activeAssistantText,
+                            rms = session.currentRms
+                        )
+                    }
+                    VoiceState.IDLE -> {
+                        if (MicrophoneOwnershipCoordinator.canWakeWordRecord()) {
+                            com.lichiai.dynamicisland.LichiAssistantStateHub.onWakeWordListening()
+                        } else {
+                            com.lichiai.dynamicisland.LichiAssistantStateHub.resetToIdle()
+                        }
+                    }
+                    VoiceState.ERROR -> {
+                        com.lichiai.dynamicisland.LichiAssistantStateHub.onError(session.errorMessage ?: "Voice Error")
+                    }
+                    VoiceState.PAUSED -> {
+                        com.lichiai.dynamicisland.LichiAssistantStateHub.updateState(com.lichiai.dynamicisland.LichiUiState.PAUSED)
+                    }
+                    VoiceState.INTERRUPTED -> {
+                        com.lichiai.dynamicisland.LichiAssistantStateHub.onVoiceListening()
+                    }
+                }
+            }
+        }
     }
 
     fun startSession(provider: ProviderConfig?, assistant: Assistant?) {
+        MicrophoneOwnershipCoordinator.requestForVoiceSession()
         activeProvider = provider
         activeAssistant = assistant
         retryCount = 0
@@ -91,6 +147,41 @@ class VoiceConversationOrchestrator(
                 partialUserText = "",
                 activeAssistantText = ""
             )
+        }
+
+        // Seed existing conversation turns if starting from an existing conversation
+        val activeConvId = activeConversationIdProvider()
+        if (activeConvId != null && conversationStore != null) {
+            orchestratorScope.launch(Dispatchers.IO) {
+                val conv = conversationStore.snapshot().firstOrNull { it.id == activeConvId }
+                if (conv != null && conv.messages.isNotEmpty()) {
+                    val loadedTurns = mutableListOf<VoiceTurn>()
+                    var i = 0
+                    val msgs = conv.messages
+                    while (i < msgs.size) {
+                        val m = msgs[i]
+                        if (m.role == "user") {
+                            val next = msgs.getOrNull(i + 1)
+                            val asstText = if (next?.role == "assistant") next.content else ""
+                            loadedTurns.add(
+                                VoiceTurn(
+                                    userText = m.content,
+                                    assistantText = asstText,
+                                    isUserFinal = true,
+                                    isAssistantComplete = true,
+                                    timestamp = m.createdAt
+                                )
+                            )
+                            if (next?.role == "assistant") i += 2 else i += 1
+                        } else {
+                            i += 1
+                        }
+                    }
+                    if (loadedTurns.isNotEmpty()) {
+                        _sessionState.update { it.copy(historyTurns = loadedTurns.takeLast(10)) }
+                    }
+                }
+            }
         }
 
         // Initialize TTS and STT
@@ -153,7 +244,11 @@ class VoiceConversationOrchestrator(
         cancelLlmAndTts()
         restartRetryJob?.cancel()
         sttManager?.stopListening()
-        sttManager?.destroy()
+        sttManager?.destroy {
+            MicrophoneOwnershipCoordinator.releaseFromVoiceSession()
+        } ?: run {
+            MicrophoneOwnershipCoordinator.releaseFromVoiceSession()
+        }
         ttsManager?.stopAndClearQueue()
         ttsManager?.shutdown()
 
@@ -204,6 +299,40 @@ class VoiceConversationOrchestrator(
             return
         }
 
+        // Check if user is issuing a structured call action (Answer, Reject, Mute, Speaker, Hold, End)
+        val currentCallSession = com.lichiai.dynamicisland.LichiAssistantStateHub.callSession.value
+        val structuredAction = callActionIntentResolver?.resolve(trimmed, currentCallSession)
+        if (structuredAction != null && callActionExecutor != null) {
+            orchestratorScope.launch {
+                _sessionState.update {
+                    it.copy(
+                        state = VoiceState.THINKING,
+                        partialUserText = trimmed,
+                        activeAssistantText = "Handling call..."
+                    )
+                }
+                val result = callActionExecutor.execute(structuredAction)
+                val responseSpeech = result.message
+                _sessionState.update {
+                    val turn = VoiceTurn(
+                        userText = trimmed,
+                        assistantText = responseSpeech,
+                        isUserFinal = true,
+                        isAssistantComplete = true
+                    )
+                    it.copy(
+                        state = VoiceState.SPEAKING,
+                        historyTurns = it.historyTurns + turn,
+                        activeAssistantText = responseSpeech
+                    )
+                }
+                saveTurnToConversation(userText = trimmed, assistantText = responseSpeech)
+                ttsManager?.stopAndClearQueue()
+                ttsManager?.enqueueSentence(responseSpeech)
+            }
+            return
+        }
+
         // Check if user is issuing a natural language phone call command
         val callIntent = callEngine?.intentResolver?.resolve(trimmed)
         if (callEngine != null && callIntent != null && (callIntent.action == CallAction.CALL_CONTACT || callIntent.action == CallAction.CALL_NUMBER)) {
@@ -230,6 +359,7 @@ class VoiceConversationOrchestrator(
                         activeAssistantText = responseSpeech
                     )
                 }
+                saveTurnToConversation(userText = trimmed, assistantText = responseSpeech)
                 ttsManager?.stopAndClearQueue()
                 ttsManager?.enqueueSentence(responseSpeech)
             }
@@ -312,19 +442,6 @@ class VoiceConversationOrchestrator(
             assistant = assistant?.name ?: "Assistant"
         )
 
-        // Build message history from past turns
-        val messages = mutableListOf<ChatMessage>()
-        if (systemPrompt.isNotBlank()) {
-            messages.add(ChatMessage("system", systemPrompt))
-        }
-
-        // Add last 6 turns for context
-        _sessionState.value.historyTurns.takeLast(6).forEach { turn ->
-            if (turn.userText.isNotBlank()) messages.add(ChatMessage("user", turn.userText))
-            if (turn.assistantText.isNotBlank()) messages.add(ChatMessage("assistant", turn.assistantText))
-        }
-        messages.add(ChatMessage("user", userQuery))
-
         val fullAssistantAccumulator = java.lang.StringBuilder()
 
         // If safe echo protection is on, pause STT during LLM/TTS
@@ -335,49 +452,89 @@ class VoiceConversationOrchestrator(
         llmStreamJob?.cancel()
         llmStreamJob = orchestratorScope.launch(Dispatchers.IO) {
             try {
-                val streamFlow = llmClient.chatStream(
-                    provider = provider,
-                    settings = currentAppSettings,
-                    modelId = modelToUse,
-                    messages = messages
-                )
+                // Build message history with actual conversation context if available
+                val messages = mutableListOf<ChatMessage>()
+                if (systemPrompt.isNotBlank()) {
+                    messages.add(ChatMessage("system", systemPrompt))
+                }
 
-                streamFlow
-                    .catch { throwable ->
-                        val errMsg = throwable.localizedMessage ?: "Error streaming from LLM"
-                        _sessionState.update {
-                            it.copy(
-                                state = VoiceState.ERROR,
-                                errorMessage = errMsg
-                            )
+                val activeConvId = activeConversationIdProvider()
+                val existingConv = if (activeConvId != null && conversationStore != null) {
+                    conversationStore.snapshot().firstOrNull { it.id == activeConvId }
+                } else null
+
+                if (existingConv != null && existingConv.messages.isNotEmpty()) {
+                    existingConv.messages.filter { it.content.isNotBlank() }.takeLast(10).forEach { msg ->
+                        messages.add(ChatMessage(msg.role, msg.content))
+                    }
+                } else {
+                    _sessionState.value.historyTurns.takeLast(6).forEach { turn ->
+                        if (turn.userText.isNotBlank()) messages.add(ChatMessage("user", turn.userText))
+                        if (turn.assistantText.isNotBlank()) messages.add(ChatMessage("assistant", turn.assistantText))
+                    }
+                }
+                messages.add(ChatMessage("user", userQuery))
+
+                var turnSaved = false
+                val persistTurnAction: suspend () -> Unit = {
+                    if (!turnSaved) {
+                        val assistantFinal = fullAssistantAccumulator.toString().trim()
+                        if (userQuery.isNotBlank() || assistantFinal.isNotBlank()) {
+                            turnSaved = true
+                            saveTurnToConversation(userText = userQuery, assistantText = assistantFinal)
                         }
                     }
-                    .collect { token ->
-                        fullAssistantAccumulator.append(token)
-                        sentenceBuffer.appendToken(token)
+                }
 
-                        _sessionState.update {
-                            it.copy(
-                                activeAssistantText = fullAssistantAccumulator.toString()
-                            )
-                        }
-                    }
-
-                // Flush remaining sentence chunk at end of stream
-                sentenceBuffer.flush()
-
-                // Save turn to history
-                val completeTurn = VoiceTurn(
-                    userText = userQuery,
-                    assistantText = fullAssistantAccumulator.toString(),
-                    isUserFinal = true,
-                    isAssistantComplete = true
-                )
-
-                _sessionState.update { state ->
-                    state.copy(
-                        historyTurns = state.historyTurns + completeTurn
+                try {
+                    val streamFlow = llmClient.chatStream(
+                        provider = provider,
+                        settings = currentAppSettings,
+                        modelId = modelToUse,
+                        messages = messages
                     )
+
+                    streamFlow
+                        .catch { throwable ->
+                            val errMsg = throwable.localizedMessage ?: "Error streaming from LLM"
+                            _sessionState.update {
+                                it.copy(
+                                    state = VoiceState.ERROR,
+                                    errorMessage = errMsg
+                                )
+                            }
+                        }
+                        .collect { token ->
+                            fullAssistantAccumulator.append(token)
+                            sentenceBuffer.appendToken(token)
+
+                            _sessionState.update {
+                                it.copy(
+                                    activeAssistantText = fullAssistantAccumulator.toString()
+                                )
+                            }
+                        }
+
+                    // Flush remaining sentence chunk at end of stream
+                    sentenceBuffer.flush()
+
+                    // Save turn to history
+                    val completeTurn = VoiceTurn(
+                        userText = userQuery,
+                        assistantText = fullAssistantAccumulator.toString(),
+                        isUserFinal = true,
+                        isAssistantComplete = true
+                    )
+
+                    _sessionState.update { state ->
+                        state.copy(
+                            historyTurns = state.historyTurns + completeTurn
+                        )
+                    }
+
+                    persistTurnAction()
+                } finally {
+                    persistTurnAction()
                 }
             } catch (e: Exception) {
                 if (e !is kotlinx.coroutines.CancellationException) {
@@ -388,6 +545,58 @@ class VoiceConversationOrchestrator(
                         )
                     }
                 }
+            }
+        }
+    }
+
+    private suspend fun saveTurnToConversation(userText: String, assistantText: String) {
+        val store = conversationStore ?: return
+        val userTrimmed = userText.trim()
+        val assistantTrimmed = assistantText.trim()
+        if (userTrimmed.isBlank() && assistantTrimmed.isBlank()) return
+
+        withContext(Dispatchers.IO) {
+            try {
+                var currentConvId = activeConversationIdProvider()
+                val existing = if (currentConvId != null) {
+                    store.snapshot().firstOrNull { it.id == currentConvId }
+                } else null
+
+                if (currentConvId == null || (existing == null && currentConvId.isBlank())) {
+                    val newConvId = newId()
+                    currentConvId = newConvId
+                    withContext(Dispatchers.Main) {
+                        onConversationIdChanged(newConvId)
+                    }
+                }
+
+                val baseTitle = userTrimmed.take(30).replace("\n", " ").ifBlank { "Voice Conversation" }
+                val now = System.currentTimeMillis()
+
+                val userMsg = Message(
+                    id = newId(),
+                    role = "user",
+                    content = userTrimmed,
+                    createdAt = now
+                )
+                val assistantMsg = Message(
+                    id = newId(),
+                    role = "assistant",
+                    content = assistantTrimmed,
+                    createdAt = now + 1
+                )
+
+                val updated = (existing ?: Conversation(id = currentConvId, title = baseTitle, messages = emptyList()))
+                    .let { conv ->
+                        conv.copy(
+                            title = if (conv.messages.isEmpty()) baseTitle else conv.title,
+                            messages = conv.messages + userMsg + assistantMsg,
+                            updatedAt = now
+                        )
+                    }
+                store.upsert(updated)
+            } catch (e: Exception) {
+                android.util.Log.e("VoiceOrchestrator", "Failed to save voice turn to conversation", e)
             }
         }
     }

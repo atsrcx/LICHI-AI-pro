@@ -30,11 +30,13 @@ import com.lichiai.R
 import com.lichiai.calling.ui.CallDiagnosticsScreen
 import com.lichiai.calling.ui.CallDisambiguationDialog
 import com.lichiai.data.ProviderConfig
+import com.lichiai.ui.dynamicisland.DynamicIslandSettingsScreen
 import com.lichiai.ui.voice.VoiceConversationScreen
 import com.lichiai.ui.voice.VoiceSettingsScreen
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-private enum class Screen { Chat, Settings, Providers, ProviderEdit, Assistants, Voice, VoiceSettings, CallDiagnostics }
+private enum class Screen { Chat, Settings, Providers, ProviderEdit, Assistants, Voice, VoiceSettings, HandleMyCalls, CallDiagnostics, DynamicIsland }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -79,7 +81,13 @@ fun AppRoot(vm: ChatViewModel) {
     androidx.activity.compose.BackHandler(enabled = screen == Screen.VoiceSettings) {
         screen = Screen.Voice
     }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.HandleMyCalls) {
+        screen = Screen.Settings
+    }
     androidx.activity.compose.BackHandler(enabled = screen == Screen.CallDiagnostics) {
+        screen = Screen.Settings
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.DynamicIsland) {
         screen = Screen.Settings
     }
 
@@ -103,6 +111,15 @@ fun AppRoot(vm: ChatViewModel) {
         toast?.let {
             snackbar.showSnackbar(it, duration = SnackbarDuration.Short)
             vm.clearToast()
+        }
+    }
+
+    // Auto-navigate to Voice Conversation Mode when any wake word is triggered
+    LaunchedEffect(vm) {
+        vm.wakeDetectedEvent.collect { phrase ->
+            if (screen != Screen.Voice) {
+                screen = Screen.Voice
+            }
         }
     }
 
@@ -179,7 +196,15 @@ fun AppRoot(vm: ChatViewModel) {
                     onOpenProviders = { screen = Screen.Providers },
                     onOpenAssistants = { screen = Screen.Assistants },
                     onOpenVoiceSettings = { screen = Screen.VoiceSettings },
-                    onOpenCallDiagnostics = { screen = Screen.CallDiagnostics }
+                    onOpenHandleMyCalls = { screen = Screen.HandleMyCalls },
+                    onOpenCallDiagnostics = { screen = Screen.CallDiagnostics },
+                    onOpenDynamicIsland = { screen = Screen.DynamicIsland }
+                )
+            }
+            Screen.HandleMyCalls -> {
+                com.lichiai.calling.ui.HandleMyCallsSettingsScreen(
+                    viewModel = vm,
+                    onBack = { screen = Screen.Settings }
                 )
             }
             Screen.Assistants -> {
@@ -239,6 +264,7 @@ fun AppRoot(vm: ChatViewModel) {
                 VoiceSettingsScreen(
                     voiceSettingsRepository = vm.voiceSettingsRepo,
                     orchestrator = vm.voiceOrchestrator,
+                    wakeWordManager = vm.wakeWordManager,
                     onBack = { screen = Screen.Settings }
                 )
             }
@@ -248,6 +274,12 @@ fun AppRoot(vm: ChatViewModel) {
                     onRequestPermissions = {
                         permissionLauncher.launch(com.lichiai.calling.permission.CallPermissionManager.REQUIRED_PERMISSIONS)
                     },
+                    onBack = { screen = Screen.Settings }
+                )
+            }
+            Screen.DynamicIsland -> {
+                DynamicIslandSettingsScreen(
+                    controller = vm.dynamicIslandController,
                     onBack = { screen = Screen.Settings }
                 )
             }

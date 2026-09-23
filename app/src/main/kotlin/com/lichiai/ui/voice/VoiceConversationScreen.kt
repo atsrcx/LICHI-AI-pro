@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
@@ -264,8 +265,12 @@ fun VoiceConversationScreen(
                 }
 
                 // Live Transcripts Floating Area
+                val hasActiveText = sessionState.partialUserText.isNotBlank() || sessionState.activeAssistantText.isNotBlank()
+                val lastTurn = sessionState.historyTurns.lastOrNull()
+                val showTranscriptCard = hasActiveText || (lastTurn != null && lastTurn.userText.isNotBlank())
+
                 AnimatedVisibility(
-                    visible = sessionState.partialUserText.isNotBlank() || sessionState.activeAssistantText.isNotBlank(),
+                    visible = showTranscriptCard,
                     enter = fadeIn(),
                     exit = fadeOut()
                 ) {
@@ -281,27 +286,61 @@ fun VoiceConversationScreen(
                         Column(
                             modifier = Modifier
                                 .padding(16.dp)
+                                .heightIn(max = 200.dp)
                                 .verticalScroll(rememberScrollState())
                         ) {
-                            if (sessionState.partialUserText.isNotBlank()) {
-                                Text(
-                                    text = "You: ${sessionState.partialUserText}",
-                                    color = Color.White,
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Normal
-                                )
-                            }
-
-                            if (sessionState.activeAssistantText.isNotBlank()) {
+                            if (hasActiveText) {
                                 if (sessionState.partialUserText.isNotBlank()) {
-                                    Spacer(Modifier.height(8.dp))
+                                    Text(
+                                        text = "You: ${sessionState.partialUserText}",
+                                        color = Color.White,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Normal
+                                    )
                                 }
-                                Text(
-                                    text = sessionState.activeAssistantText,
-                                    color = Color(0xFF93C5FD),
-                                    fontSize = 15.sp,
-                                    fontWeight = FontWeight.Medium
-                                )
+
+                                if (sessionState.activeAssistantText.isNotBlank()) {
+                                    if (sessionState.partialUserText.isNotBlank()) {
+                                        Spacer(Modifier.height(8.dp))
+                                    }
+                                    Text(
+                                        text = sessionState.activeAssistantText,
+                                        color = Color(0xFF93C5FD),
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                            } else if (lastTurn != null) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "✓ Saved to chat history",
+                                        color = Color(0xFF34D399),
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
+                                Spacer(Modifier.height(6.dp))
+                                if (lastTurn.userText.isNotBlank()) {
+                                    Text(
+                                        text = "You: ${lastTurn.userText}",
+                                        color = Color.White,
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Normal
+                                    )
+                                }
+                                if (lastTurn.assistantText.isNotBlank()) {
+                                    Spacer(Modifier.height(6.dp))
+                                    Text(
+                                        text = "${activeAssistant?.name ?: "LICHI AI"}: ${lastTurn.assistantText}",
+                                        color = Color(0xFF93C5FD),
+                                        fontSize = 14.sp,
+                                        fontWeight = FontWeight.Medium
+                                    )
+                                }
                             }
                         }
                     }

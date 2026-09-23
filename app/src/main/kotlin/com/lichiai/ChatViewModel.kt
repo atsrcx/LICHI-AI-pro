@@ -17,9 +17,12 @@ import com.lichiai.data.SettingsRepository
 import com.lichiai.util.PromptVars
 import com.lichiai.util.newId
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.onEach
@@ -38,8 +41,42 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val contactRepository = com.lichiai.calling.contacts.ContactRepository(app, callPermissionManager, contactAliasesRepo)
     val callDiagnosticsRepo = com.lichiai.calling.engine.CallDiagnosticsRepository()
     val universalCallEngine = com.lichiai.calling.engine.UniversalCallEngine(app, callPermissionManager, contactRepository, callDiagnosticsRepo)
+    val callHandlingSettingsRepo = com.lichiai.calling.data.CallHandlingSettingsRepository(app)
+    val callStateMonitor = com.lichiai.calling.state.CallStateMonitor.getInstance(app, contactRepository)
+    val callActionIntentResolver = com.lichiai.calling.intent.CallActionIntentResolver()
+    val callActionExecutor = com.lichiai.calling.action.CallActionExecutor(
+        context = app,
+        universalCallEngine = universalCallEngine,
+        callPermissionManager = callPermissionManager,
+        callStateMonitor = callStateMonitor
+    )
+    val dynamicIslandController = com.lichiai.dynamicisland.DynamicIslandController.getInstance(app)
     private val client = LlmClient()
-    val voiceOrchestrator = com.lichiai.voice.VoiceConversationOrchestrator(app, client, voiceSettingsRepo, settingsRepo, universalCallEngine)
+
+    private val _activeId = MutableStateFlow<String?>(null)
+    val activeId: StateFlow<String?> = _activeId.asStateFlow()
+
+    val voiceOrchestrator = com.lichiai.voice.VoiceConversationOrchestrator(
+        context = app,
+        llmClient = client,
+        voiceSettingsRepository = voiceSettingsRepo,
+        settingsRepository = settingsRepo,
+        callEngine = universalCallEngine,
+        callActionExecutor = callActionExecutor,
+        callActionIntentResolver = callActionIntentResolver,
+        conversationStore = store,
+        activeConversationIdProvider = { _activeId.value },
+        onConversationIdChanged = { id -> _activeId.value = id }
+    )
+
+    val wakeWordManager = com.lichiai.voice.wakeword.WakeWordManager(
+        context = app,
+        voiceSettingsRepository = voiceSettingsRepo,
+        voiceOrchestrator = voiceOrchestrator
+    )
+
+    private val _wakeDetectedEvent = MutableSharedFlow<String>(extraBufferCapacity = 8)
+    val wakeDetectedEvent: SharedFlow<String> = _wakeDetectedEvent.asSharedFlow()
 
     val settings: StateFlow<AppSettings> = settingsRepo.settings
         .stateIn(viewModelScope, SharingStarted.Eagerly, AppSettings())
@@ -58,9 +95,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val _streamingOverlay = MutableStateFlow<Pair<String, String>?>(null)
     val streamingOverlay: StateFlow<Pair<String, String>?> = _streamingOverlay.asStateFlow()
 
-    private val _activeId = MutableStateFlow<String?>(null)
-    val activeId: StateFlow<String?> = _activeId.asStateFlow()
-
     private val _isStreaming = MutableStateFlow(false)
     val isStreaming: StateFlow<Boolean> = _isStreaming.asStateFlow()
 
@@ -74,6 +108,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val fetchingModelsFor: StateFlow<String?> = _fetchingModelsFor.asStateFlow()
 
     private var streamingJob: Job? = null
+
+    init {
+        try {
+            dynamicIslandController.start()
+        } catch (_: Throwable) {}
+
+        viewModelScope.launch {
+            wakeWordManager.wakeEvents.collect { event ->
+                if (event is com.lichiai.voice.wakeword.WakeWordEvent.Detected) {
+                    _wakeDetectedEvent.emit(event.phrase)
+                }
+            }
+        }
+    }
+
+    fun triggerVoiceMode(phrase: String = "Wake Word") {
+        viewModelScope.launch {
+            _wakeDetectedEvent.emit(phrase)
+        }
+    }
 
     fun selectConversation(id: String?) { _activeId.value = id }
 
@@ -211,13 +265,57 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    fun executeCallAction(action: com.lichiai.calling.action.StructuredCallAction) {
+        viewModelScope.launch {
+            callActionExecutor.execute(action)
+        }
+    }
+
     fun sendMessage(text: String, attachments: List<com.lichiai.data.Attachment> = emptyList()) {
         // Reject re-entrant sends while a stream is in flight (debounce double-tap)
         if (_isStreaming.value || streamingJob?.isActive == true) return
         val trimmed = text.trim()
         if (trimmed.isEmpty() && attachments.isEmpty()) return
 
-        // Intercept natural language call commands directly and execute locally
+        // Intercept structured call action commands (Answer, Reject, Mute, Speaker, Hold, End)
+        val currentCallSession = callStateMonitor.currentSession()
+        val structuredAction = callActionIntentResolver.resolve(trimmed, currentCallSession)
+        if (attachments.isEmpty() && structuredAction != null) {
+            viewModelScope.launch {
+                val activeId = _activeId.value ?: newId().also { _activeId.value = it }
+                val existing = store.snapshot().firstOrNull { it.id == activeId }
+                val baseTitle = trimmed.take(30).replace("\n", " ")
+
+                val userMsg = Message(
+                    id = newId(),
+                    role = "user",
+                    content = trimmed,
+                    attachments = attachments
+                )
+
+                val callActionResult = callActionExecutor.execute(structuredAction)
+                val responseMsgText = callActionResult.message
+
+                val assistantMsg = Message(
+                    id = newId(),
+                    role = "assistant",
+                    content = responseMsgText
+                )
+
+                val updated = (existing ?: Conversation(id = activeId, title = baseTitle, messages = emptyList()))
+                    .let { conv ->
+                        conv.copy(
+                            title = if (conv.messages.isEmpty()) baseTitle else conv.title,
+                            messages = conv.messages + userMsg + assistantMsg,
+                            updatedAt = System.currentTimeMillis()
+                        )
+                    }
+                store.upsert(updated)
+            }
+            return
+        }
+
+        // Intercept natural language outgoing call commands directly and execute locally
         val callIntent = universalCallEngine.intentResolver.resolve(trimmed)
         if (attachments.isEmpty() && (callIntent.action == com.lichiai.calling.intent.CallAction.CALL_CONTACT || callIntent.action == com.lichiai.calling.intent.CallAction.CALL_NUMBER)) {
             viewModelScope.launch {
@@ -479,6 +577,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     override fun onCleared() {
         super.onCleared()
+        wakeWordManager.release()
         contactRepository.destroy()
         voiceOrchestrator.destroy()
     }

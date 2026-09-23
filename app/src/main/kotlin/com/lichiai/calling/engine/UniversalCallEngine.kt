@@ -234,6 +234,7 @@ class UniversalCallEngine(
         }
 
         return try {
+            com.lichiai.voice.wakeword.MicrophoneOwnershipCoordinator.notifyCallActive(true)
             context.startActivity(callIntent)
             val displayNum = PhoneNumberNormalizer.formatForDisplay(rawNumber)
             val successMsg = if (contactName != rawNumber && contactName != normalizedNumber) {

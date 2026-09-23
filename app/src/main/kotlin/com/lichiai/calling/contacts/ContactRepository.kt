@@ -142,6 +142,20 @@ class ContactRepository(
         contactIndex.search(query)
     }
 
+    suspend fun findBestMatch(query: String): ContactCandidate? {
+        findFastMatch(query)?.let { return it }
+        val results = searchContacts(query)
+        return results.firstOrNull()
+    }
+
+    /**
+     * Non-blocking, zero-latency synchronous lookup against the memory-cached contact index.
+     */
+    fun findFastMatch(query: String): ContactCandidate? {
+        if (cachedContacts.isEmpty()) return null
+        return contactIndex.search(query).firstOrNull()
+    }
+
     suspend fun refresh() {
         loadAllContacts(forceRefresh = true)
     }

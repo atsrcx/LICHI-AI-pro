@@ -1,6 +1,7 @@
 package com.lichiai
 
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -14,6 +15,11 @@ import com.lichiai.ui.theme.LichiAITheme
 import java.util.Locale
 
 class MainActivity : ComponentActivity() {
+
+    companion object {
+        const val EXTRA_START_VOICE_MODE = "com.lichiai.START_VOICE_MODE"
+        const val EXTRA_TRIGGERED_PHRASE = "com.lichiai.TRIGGERED_PHRASE"
+    }
 
     private val vm: ChatViewModel by viewModels()
 
@@ -48,6 +54,7 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        handleVoiceModeIntent(intent)
         setContent {
             val s by vm.settings.collectAsState()
             // Mirror language to SharedPreferences so attachBaseContext can pick it up next launch
@@ -59,5 +66,40 @@ class MainActivity : ComponentActivity() {
                 AppRoot(vm)
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleVoiceModeIntent(intent)
+    }
+
+    private fun handleVoiceModeIntent(intent: Intent?) {
+        if (intent == null) return
+        val startVoice = intent.getBooleanExtra(EXTRA_START_VOICE_MODE, false)
+        val action = intent.action
+        val isAssistAction = action == Intent.ACTION_ASSIST ||
+                action == Intent.ACTION_VOICE_COMMAND ||
+                action == "android.speech.action.WEB_SEARCH"
+
+        if (startVoice || isAssistAction) {
+            val phrase = intent.getStringExtra(EXTRA_TRIGGERED_PHRASE) ?: if (isAssistAction) "Assistant" else "Wake Word"
+            vm.triggerVoiceMode(phrase)
+        }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        try {
+            vm.wakeWordManager.onAppForegroundChanged(true)
+            vm.dynamicIslandController.checkAndRefreshOverlay()
+        } catch (_: Throwable) {}
+    }
+
+    override fun onStop() {
+        super.onStop()
+        try {
+            vm.wakeWordManager.onAppForegroundChanged(false)
+        } catch (_: Throwable) {}
     }
 }

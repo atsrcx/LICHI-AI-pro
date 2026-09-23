@@ -10,9 +10,13 @@ import kotlinx.coroutines.flow.asStateFlow
 
 data class CallPermissionState(
     val hasReadContacts: Boolean = false,
-    val hasCallPhone: Boolean = false
+    val hasCallPhone: Boolean = false,
+    val hasReadPhoneState: Boolean = false,
+    val hasAnswerPhoneCalls: Boolean = false,
+    val hasRecordAudio: Boolean = false
 ) {
     val allGranted: Boolean get() = hasReadContacts && hasCallPhone
+    val fullCallHandlingGranted: Boolean get() = hasReadContacts && hasCallPhone && hasReadPhoneState && hasAnswerPhoneCalls
 }
 
 sealed class MissingPermissionReason {
@@ -34,9 +38,27 @@ class CallPermissionManager(private val context: Context) {
             Manifest.permission.CALL_PHONE
         ) == PackageManager.PERMISSION_GRANTED
 
+        val hasPhoneState = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_PHONE_STATE
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val hasAnswerCalls = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ANSWER_PHONE_CALLS
+        ) == PackageManager.PERMISSION_GRANTED
+
+        val hasAudio = ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+
         return CallPermissionState(
             hasReadContacts = hasContacts,
-            hasCallPhone = hasCall
+            hasCallPhone = hasCall,
+            hasReadPhoneState = hasPhoneState,
+            hasAnswerPhoneCalls = hasAnswerCalls,
+            hasRecordAudio = hasAudio
         )
     }
 
@@ -63,6 +85,27 @@ class CallPermissionManager(private val context: Context) {
         ) == PackageManager.PERMISSION_GRANTED
     }
 
+    fun hasReadPhoneState(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.READ_PHONE_STATE
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun hasAnswerPhoneCalls(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.ANSWER_PHONE_CALLS
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
+    fun hasRecordAudio(): Boolean {
+        return ContextCompat.checkSelfPermission(
+            context,
+            Manifest.permission.RECORD_AUDIO
+        ) == PackageManager.PERMISSION_GRANTED
+    }
+
     fun getMissingPermissionReason(): MissingPermissionReason? {
         val hasContacts = hasReadContacts()
         val hasCall = hasCallPhone()
@@ -78,6 +121,14 @@ class CallPermissionManager(private val context: Context) {
         val REQUIRED_PERMISSIONS = arrayOf(
             Manifest.permission.READ_CONTACTS,
             Manifest.permission.CALL_PHONE
+        )
+
+        val ALL_CALL_HANDLING_PERMISSIONS = arrayOf(
+            Manifest.permission.READ_CONTACTS,
+            Manifest.permission.CALL_PHONE,
+            Manifest.permission.READ_PHONE_STATE,
+            Manifest.permission.ANSWER_PHONE_CALLS,
+            Manifest.permission.RECORD_AUDIO
         )
     }
 }

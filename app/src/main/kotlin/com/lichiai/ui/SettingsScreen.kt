@@ -23,11 +23,17 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.Assistant
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.RadioButtonUnchecked
 import androidx.compose.material.icons.filled.Storage
+import androidx.compose.ui.platform.LocalContext
+import com.lichiai.assistant.role.AssistantRoleHelper
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -65,8 +71,22 @@ fun SettingsScreen(
     onOpenProviders: () -> Unit,
     onOpenAssistants: () -> Unit,
     onOpenVoiceSettings: () -> Unit = {},
-    onOpenCallDiagnostics: () -> Unit = {}
+    onOpenHandleMyCalls: () -> Unit = {},
+    onOpenCallDiagnostics: () -> Unit = {},
+    onOpenDynamicIsland: () -> Unit = {}
 ) {
+    val context = LocalContext.current
+    var isDefaultAssistant by remember { mutableStateOf(AssistantRoleHelper.isDefaultAssistant(context)) }
+    val assistantRoleLauncher = androidx.activity.compose.rememberLauncherForActivityResult(
+        contract = androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult()
+    ) {
+        isDefaultAssistant = AssistantRoleHelper.isDefaultAssistant(context)
+    }
+
+    androidx.compose.runtime.LaunchedEffect(Unit) {
+        isDefaultAssistant = AssistantRoleHelper.isDefaultAssistant(context)
+    }
+
     // Local state seeded once; LaunchedEffect resyncs only when external settings change.
     var system by rememberSaveable { mutableStateOf(settings.systemPrompt) }
     var temperature by rememberSaveable { mutableStateOf(settings.temperature) }
@@ -171,6 +191,30 @@ fun SettingsScreen(
                 }
             }
 
+            // Handle My Calls entry
+            SectionCard {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenHandleMyCalls)
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.Call, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Handle My Calls",
+                            style = MaterialTheme.typography.titleMedium)
+                        Text("AI call control, Dynamic Island call controls & smart rules",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Icon(Icons.Default.ChevronRight, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
             // Universal Calling & Contacts entry
             SectionCard {
                 Row(
@@ -192,6 +236,94 @@ fun SettingsScreen(
                     }
                     Icon(Icons.Default.ChevronRight, contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            // Dynamic Island / Floating Assistant Surface entry
+            SectionCard {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(onClick = onOpenDynamicIsland)
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(Icons.Default.AutoAwesome, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text("Dynamic Island / Floating Surface",
+                            style = MaterialTheme.typography.titleMedium)
+                        Text("Draggable overlay, live assistant states, styles & gestures",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Icon(Icons.Default.ChevronRight, contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+
+            // System Default Digital Assistant entry
+            SectionHeader(stringResource(R.string.section_system_assistant))
+            SectionCard {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable {
+                            val intent = AssistantRoleHelper.createDefaultAssistantRequestIntent(context)
+                            try {
+                                assistantRoleLauncher.launch(intent)
+                            } catch (e: Exception) {
+                                android.util.Log.e("SettingsScreen", "Failed launching assistant role intent", e)
+                            }
+                        }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Assistant,
+                        contentDescription = null,
+                        tint = if (isDefaultAssistant) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(Modifier.width(12.dp))
+                    Column(modifier = Modifier.weight(1f)) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text(
+                                text = stringResource(R.string.system_assistant_title),
+                                style = MaterialTheme.typography.titleMedium
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Box(
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(4.dp))
+                                    .background(
+                                        if (isDefaultAssistant) MaterialTheme.colorScheme.primaryContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant
+                                    )
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = stringResource(R.string.system_assistant_role_tag),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = if (isDefaultAssistant) MaterialTheme.colorScheme.onPrimaryContainer
+                                    else MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Spacer(Modifier.height(2.dp))
+                        Text(
+                            text = if (isDefaultAssistant) stringResource(R.string.system_assistant_active)
+                            else stringResource(R.string.system_assistant_inactive),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (isDefaultAssistant) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                    }
+                    Icon(
+                        imageVector = if (isDefaultAssistant) Icons.Default.CheckCircle else Icons.Default.RadioButtonUnchecked,
+                        contentDescription = null,
+                        tint = if (isDefaultAssistant) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outline
+                    )
                 }
             }
 
