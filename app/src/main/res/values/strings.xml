@@ -107,4 +107,18 @@
     <string name="system_assistant_active">Active • Handles long press, gestures &amp; hotword</string>
     <string name="system_assistant_inactive">Not active • Tap to set LICHI as default assistant</string>
     <string name="system_assistant_role_tag">ROLE_ASSISTANT</string>
+    <string name="section_autonomous_agent">Autonomous Agent V2</string>
+    <string name="autonomous_agent_title">Autonomous Phone Automation</string>
+    <string name="autonomous_agent_desc">Enables iterative UI automation, multi-step tasks, and app interactions</string>
+    <string name="autonomous_agent_reasoning_provider">Reasoning Provider</string>
+    <string name="autonomous_agent_use_current_provider">Use Current Provider</string>
+    <string name="autonomous_agent_use_current_provider_desc">Use active Lichi chat provider and model for agent reasoning</string>
+    <string name="autonomous_agent_dedicated_gemini">Dedicated Gemini Backend</string>
+    <string name="autonomous_agent_api_key_label">Agent Gemini API Key</string>
+    <string name="autonomous_agent_api_key_placeholder">AIzaSy...</string>
+    <string name="autonomous_agent_model_label">Agent Model</string>
+    <string name="autonomous_agent_accessibility_label">Accessibility Service</string>
+    <string name="autonomous_agent_accessibility_active">Enabled • UI perception &amp; actions ready</string>
+    <string name="autonomous_agent_accessibility_inactive">Not enabled • Tap to open Accessibility settings</string>
+    <string name="accessibility_service_description">Lichi AI Autonomous Agent accessibility service for on-screen perception and UI automation actions.</string>
 </resources>

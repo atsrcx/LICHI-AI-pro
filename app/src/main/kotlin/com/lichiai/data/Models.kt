@@ -1,5 +1,8 @@
 package com.lichiai.data
 
+import com.lichiai.spy.model.PlatformProfile
+import com.lichiai.ui.activity.AssistantActivityState
+import com.lichiai.web.model.WebActivityState
 import kotlinx.serialization.Serializable
 
 enum class Role { user, assistant, system }
@@ -19,7 +22,12 @@ data class Message(
     val role: String,
     val content: String,
     val attachments: List<Attachment> = emptyList(),
-    val createdAt: Long = System.currentTimeMillis()
+    val webActivity: WebActivityState? = null,
+    val createdAt: Long = System.currentTimeMillis(),
+    val requestId: String? = null,
+    val taskActivity: AssistantActivityState? = null,
+    val spyProfile: PlatformProfile? = null,
+    val spyProfiles: List<PlatformProfile> = emptyList()
 )
 
 @Serializable
@@ -28,5 +36,6 @@ data class Conversation(
     val title: String,
     val messages: List<Message> = emptyList(),
     val createdAt: Long = System.currentTimeMillis(),
-    val updatedAt: Long = System.currentTimeMillis()
+    val updatedAt: Long = System.currentTimeMillis(),
+    val conversationStateJson: String? = null
 )

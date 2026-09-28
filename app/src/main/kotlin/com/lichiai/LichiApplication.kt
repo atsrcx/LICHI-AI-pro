@@ -32,5 +32,9 @@ class LichiApplication : Application() {
         try {
             SystemAssistantBridge.getInstance(this)
         } catch (_: Throwable) {}
+
+        try {
+            com.lichiai.agentvision.overlay.AgentVisionOverlayManager.getInstance(this).startObserving()
+        } catch (_: Throwable) {}
     }
 }

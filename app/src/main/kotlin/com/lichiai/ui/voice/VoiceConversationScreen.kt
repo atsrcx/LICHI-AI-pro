@@ -8,19 +8,26 @@ import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.navigationBars
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBars
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -41,6 +48,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -51,17 +59,21 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.lichiai.data.AppSettings
 import com.lichiai.data.Assistant
 import com.lichiai.data.ProviderConfig
+import com.lichiai.ui.LichiVisualTokens
 import com.lichiai.voice.VoiceConversationOrchestrator
 import com.lichiai.voice.conversation.VoiceState
 
@@ -76,6 +88,8 @@ fun VoiceConversationScreen(
 ) {
     val context = LocalContext.current
     val sessionState by orchestrator.sessionState.collectAsState()
+    val agentStatus by orchestrator.agentLiveStatus.collectAsState()
+    val webActivityState by orchestrator.webActivityState.collectAsState()
 
     var hasMicPermission by remember {
         mutableStateOf(
@@ -113,19 +127,32 @@ fun VoiceConversationScreen(
         }
     }
 
-    // Fullscreen Ambient Dark Background
+    // Clean, premium white / light background (supporting dark theme gracefully)
+    val isDark = MaterialTheme.colorScheme.background.red < 0.5f
+    val bgBrush = if (isDark) {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFF0F172A),
+                Color(0xFF0B1120),
+                Color(0xFF020617)
+            )
+        )
+    } else {
+        Brush.verticalGradient(
+            colors = listOf(
+                Color(0xFFFFFFFF),
+                Color(0xFFFBFBFE),
+                Color(0xFFF3F1FA)
+            )
+        )
+    }
+
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(
-                Brush.verticalGradient(
-                    colors = listOf(
-                        Color(0xFF0F172A),
-                        Color(0xFF020617),
-                        Color(0xFF000000)
-                    )
-                )
-            )
+            .background(bgBrush)
+            .padding(WindowInsets.statusBars.asPaddingValues())
+            .padding(WindowInsets.navigationBars.asPaddingValues())
     ) {
         if (!hasMicPermission) {
             // Permission Request State
@@ -134,78 +161,143 @@ fun VoiceConversationScreen(
                 onClose = onClose
             )
         } else {
-            // Active Voice Conversation View
+            // Active Voice Conversation View matching reference design
             Column(
                 modifier = Modifier
                     .fillMaxSize()
-                    .padding(horizontal = 20.dp, vertical = 24.dp),
+                    .padding(horizontal = 20.dp, vertical = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.SpaceBetween
             ) {
-                // Top Header Pill & Controls
+                // 1. Top Header Bar: Model Selector on Left, Controls on Right
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(top = 16.dp),
+                        .padding(top = 4.dp),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Close button
-                    IconButton(
-                        onClick = onClose,
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(Color.White.copy(alpha = 0.1f), CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Close,
-                            contentDescription = "Exit Voice Mode",
-                            tint = Color.White
-                        )
+                    // Top-Left: Model & Assistant Pill
+                    val modelDisplay = activeSettings.activeModel.ifBlank {
+                        activeProvider?.models?.firstOrNull() ?: "Auto"
                     }
+                    val brandName = activeAssistant?.name ?: "LICHI-AI"
 
-                    // Model & Assistant Pill
                     Surface(
-                        color = Color.White.copy(alpha = 0.12f),
-                        shape = RoundedCornerShape(20.dp)
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(20.dp),
+                        shadowElevation = 2.dp,
+                        border = androidx.compose.foundation.BorderStroke(
+                            0.5.dp,
+                            MaterialTheme.colorScheme.outlineVariant
+                        )
                     ) {
                         Row(
-                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp),
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = activeAssistant?.name ?: "LICHI AI",
-                                color = Color.White,
-                                fontSize = 14.sp,
-                                fontWeight = FontWeight.SemiBold
+                            Box(
+                                modifier = Modifier
+                                    .size(8.dp)
+                                    .clip(CircleShape)
+                                    .background(LichiVisualTokens.BrandPurple)
                             )
-                            val modelDisplay = activeSettings.activeModel.ifBlank { activeProvider?.models?.firstOrNull() ?: "Auto" }
+                            Spacer(Modifier.width(8.dp))
+                            Text(
+                                text = brandName,
+                                color = MaterialTheme.colorScheme.onSurface,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold
+                            )
                             Text(
                                 text = " · $modelDisplay",
-                                color = Color(0xFF94A3B8),
-                                fontSize = 13.sp
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                fontSize = 12.sp,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
                             )
                         }
                     }
 
-                    // Voice Settings Gear
-                    IconButton(
-                        onClick = onOpenVoiceSettings,
-                        modifier = Modifier
-                            .size(44.dp)
-                            .background(Color.White.copy(alpha = 0.1f), CircleShape)
+                    // Top-Right: Quick Controls (Mic Mute toggle + Voice Settings + Close)
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Icon(
-                            Icons.Default.Settings,
-                            contentDescription = "Voice Settings",
-                            tint = Color.White
-                        )
+                        // Mic Mute Status Toggle
+                        IconButton(
+                            onClick = { orchestrator.toggleMute() },
+                            modifier = Modifier
+                                .size(40.dp)
+                                .shadow(2.dp, CircleShape)
+                                .background(
+                                    if (sessionState.isMicMuted) MaterialTheme.colorScheme.errorContainer
+                                    else MaterialTheme.colorScheme.surface,
+                                    CircleShape
+                                )
+                                .border(
+                                    0.5.dp,
+                                    if (sessionState.isMicMuted) MaterialTheme.colorScheme.error
+                                    else MaterialTheme.colorScheme.outlineVariant,
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                imageVector = if (sessionState.isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                                contentDescription = if (sessionState.isMicMuted) "Unmute Microphone" else "Mute Microphone",
+                                tint = if (sessionState.isMicMuted) MaterialTheme.colorScheme.error
+                                else MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        // Voice Settings Gear
+                        IconButton(
+                            onClick = onOpenVoiceSettings,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .shadow(2.dp, CircleShape)
+                                .background(MaterialTheme.colorScheme.surface, CircleShape)
+                                .border(
+                                    0.5.dp,
+                                    MaterialTheme.colorScheme.outlineVariant,
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                Icons.Default.Settings,
+                                contentDescription = "Voice Settings",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        // Exit / Close button
+                        IconButton(
+                            onClick = onClose,
+                            modifier = Modifier
+                                .size(40.dp)
+                                .shadow(2.dp, CircleShape)
+                                .background(MaterialTheme.colorScheme.surface, CircleShape)
+                                .border(
+                                    0.5.dp,
+                                    MaterialTheme.colorScheme.outlineVariant,
+                                    CircleShape
+                                )
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Exit Voice Mode",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
                 }
 
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(10.dp))
 
-                // Center Animated Voice Orb
+                // 2. Center Animated Voice Orb & Real-time Status Text
                 Box(
                     modifier = Modifier
                         .weight(1f)
@@ -217,10 +309,13 @@ fun VoiceConversationScreen(
                         verticalArrangement = Arrangement.Center
                     ) {
                         // Interactive Voice Orb (Tap to Interrupt / Speak)
+                        val orbInteractionSource = remember { MutableInteractionSource() }
+                        val isOrbPressed by orbInteractionSource.collectIsPressedAsState()
+
                         Box(
                             modifier = Modifier
                                 .clickable(
-                                    interactionSource = remember { MutableInteractionSource() },
+                                    interactionSource = orbInteractionSource,
                                     indication = null
                                 ) {
                                     if (sessionState.state == VoiceState.SPEAKING || sessionState.state == VoiceState.THINKING) {
@@ -230,177 +325,226 @@ fun VoiceConversationScreen(
                         ) {
                             VoiceOrb(
                                 state = sessionState.state,
-                                rms = sessionState.currentRms
+                                rms = sessionState.currentRms,
+                                baseColor = LichiVisualTokens.BrandPurple,
+                                agentStatus = agentStatus,
+                                isPressed = isOrbPressed
                             )
                         }
 
-                        Spacer(Modifier.height(20.dp))
+                        Spacer(Modifier.height(24.dp))
 
                         // Status Headline
-                        val statusText = when (sessionState.state) {
-                            VoiceState.LISTENING -> "Listening..."
-                            VoiceState.TRANSCRIBING -> "Listening to you..."
-                            VoiceState.THINKING -> "Thinking..."
-                            VoiceState.SPEAKING -> "Speaking (Tap orb to interrupt)"
-                            VoiceState.INTERRUPTED -> "Interrupted"
-                            VoiceState.ERROR -> sessionState.errorMessage ?: "Speech error"
-                            VoiceState.PAUSED -> "Microphone Muted"
-                            VoiceState.IDLE -> "Connecting..."
+                        val isAgentRunning = agentStatus.state != com.lichiai.agent.model.AgentExecutionState.IDLE
+                        val statusText = when {
+                            isAgentRunning -> {
+                                if (agentStatus.activityText.isNotBlank()) "Agent: ${agentStatus.activityText}"
+                                else "Agent: ${agentStatus.state.name.lowercase().replaceFirstChar { it.uppercase() }}..."
+                            }
+                            sessionState.isMicMuted -> "Microphone Muted"
+                            sessionState.state == VoiceState.LISTENING -> "Listening..."
+                            sessionState.state == VoiceState.TRANSCRIBING -> "Listening to you..."
+                            sessionState.state == VoiceState.THINKING -> "Thinking..."
+                            sessionState.state == VoiceState.SPEAKING -> "Speaking (Tap orb to interrupt)"
+                            sessionState.state == VoiceState.INTERRUPTED -> "Interrupted"
+                            sessionState.state == VoiceState.ERROR -> sessionState.errorMessage ?: "Speech error"
+                            sessionState.state == VoiceState.PAUSED -> "Paused"
+                            else -> "Connecting..."
                         }
 
                         Text(
                             text = statusText,
-                            color = when (sessionState.state) {
-                                VoiceState.ERROR -> Color(0xFFFF5252)
-                                VoiceState.SPEAKING -> Color(0xFFFFD700)
-                                VoiceState.THINKING -> Color(0xFFE040FB)
-                                VoiceState.LISTENING -> Color(0xFF00E5FF)
-                                else -> Color(0xFFCBD5E1)
+                            color = when {
+                                sessionState.state == VoiceState.ERROR -> Color(0xFFEF4444)
+                                sessionState.isMicMuted -> Color(0xFFEF4444)
+                                sessionState.state == VoiceState.SPEAKING -> LichiVisualTokens.BrandPurple
+                                sessionState.state == VoiceState.THINKING -> LichiVisualTokens.BrandPurple.copy(alpha = 0.85f)
+                                sessionState.state == VoiceState.LISTENING -> LichiVisualTokens.BrandPurple
+                                isDark -> Color(0xFFE2E8F0)
+                                else -> LichiVisualTokens.TextNavy
                             },
                             fontSize = 17.sp,
-                            fontWeight = FontWeight.Medium,
+                            fontWeight = FontWeight.SemiBold,
                             textAlign = TextAlign.Center
                         )
                     }
                 }
 
-                // Live Transcripts Floating Area
+                // 3. Lower Live Transcripts & Status Card
                 val hasActiveText = sessionState.partialUserText.isNotBlank() || sessionState.activeAssistantText.isNotBlank()
                 val lastTurn = sessionState.historyTurns.lastOrNull()
-                val showTranscriptCard = hasActiveText || (lastTurn != null && lastTurn.userText.isNotBlank())
+                val showTranscriptCard = hasActiveText || (lastTurn != null && lastTurn.userText.isNotBlank()) || webActivityState.status != com.lichiai.web.model.WebActivityStatus.IDLE
 
                 AnimatedVisibility(
                     visible = showTranscriptCard,
                     enter = fadeIn(),
                     exit = fadeOut()
                 ) {
-                    Card(
+                    Column(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(bottom = 16.dp),
-                        colors = CardDefaults.cardColors(
-                            containerColor = Color.White.copy(alpha = 0.08f)
-                        ),
-                        shape = RoundedCornerShape(16.dp)
+                            .padding(bottom = 12.dp)
                     ) {
-                        Column(
-                            modifier = Modifier
-                                .padding(16.dp)
-                                .heightIn(max = 200.dp)
-                                .verticalScroll(rememberScrollState())
-                        ) {
-                            if (hasActiveText) {
-                                if (sessionState.partialUserText.isNotBlank()) {
-                                    Text(
-                                        text = "You: ${sessionState.partialUserText}",
-                                        color = Color.White,
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Normal
-                                    )
-                                }
+                        if (webActivityState.status != com.lichiai.web.model.WebActivityStatus.IDLE) {
+                            com.lichiai.web.ui.WebActivityCard(
+                                activityState = webActivityState,
+                                modifier = Modifier.padding(bottom = 8.dp)
+                            )
+                        }
 
-                                if (sessionState.activeAssistantText.isNotBlank()) {
-                                    if (sessionState.partialUserText.isNotBlank()) {
-                                        Spacer(Modifier.height(8.dp))
-                                    }
-                                    Text(
-                                        text = sessionState.activeAssistantText,
-                                        color = Color(0xFF93C5FD),
-                                        fontSize = 15.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                            } else if (lastTurn != null) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
+                        if (hasActiveText || (lastTurn != null && lastTurn.userText.isNotBlank())) {
+                            Card(
+                                modifier = Modifier.fillMaxWidth(),
+                                colors = CardDefaults.cardColors(
+                                    containerColor = MaterialTheme.colorScheme.surface
+                                ),
+                                shape = RoundedCornerShape(18.dp),
+                                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp),
+                                border = androidx.compose.foundation.BorderStroke(
+                                    0.5.dp,
+                                    MaterialTheme.colorScheme.outlineVariant
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .padding(horizontal = 16.dp, vertical = 14.dp)
+                                        .heightIn(max = 160.dp)
+                                        .verticalScroll(rememberScrollState())
                                 ) {
-                                    Text(
-                                        text = "✓ Saved to chat history",
-                                        color = Color(0xFF34D399),
-                                        fontSize = 12.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
-                                }
-                                Spacer(Modifier.height(6.dp))
-                                if (lastTurn.userText.isNotBlank()) {
-                                    Text(
-                                        text = "You: ${lastTurn.userText}",
-                                        color = Color.White,
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Normal
-                                    )
-                                }
-                                if (lastTurn.assistantText.isNotBlank()) {
-                                    Spacer(Modifier.height(6.dp))
-                                    Text(
-                                        text = "${activeAssistant?.name ?: "LICHI AI"}: ${lastTurn.assistantText}",
-                                        color = Color(0xFF93C5FD),
-                                        fontSize = 14.sp,
-                                        fontWeight = FontWeight.Medium
-                                    )
+                                    if (hasActiveText) {
+                                        if (sessionState.partialUserText.isNotBlank()) {
+                                            Text(
+                                                text = "You: ${sessionState.partialUserText}",
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+
+                                        if (sessionState.activeAssistantText.isNotBlank()) {
+                                            if (sessionState.partialUserText.isNotBlank()) {
+                                                Spacer(Modifier.height(6.dp))
+                                            }
+                                            Text(
+                                                text = sessionState.activeAssistantText,
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+                                    } else if (lastTurn != null) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Text(
+                                                text = "✓ Saved to chat history",
+                                                color = Color(0xFF10B981),
+                                                fontSize = 12.sp,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                        }
+                                        Spacer(Modifier.height(6.dp))
+                                        if (lastTurn.userText.isNotBlank()) {
+                                            Text(
+                                                text = "You: ${lastTurn.userText}",
+                                                color = MaterialTheme.colorScheme.onSurface,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Normal
+                                            )
+                                        }
+                                        if (lastTurn.assistantText.isNotBlank()) {
+                                            Spacer(Modifier.height(6.dp))
+                                            Text(
+                                                text = "${activeAssistant?.name ?: "LICHI AI"}: ${lastTurn.assistantText}",
+                                                color = MaterialTheme.colorScheme.primary,
+                                                fontSize = 14.sp,
+                                                fontWeight = FontWeight.Medium
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
                 }
 
-                // Bottom Action Bar Controls
+                // 4. Bottom Centered Action Pill (3 Controls: Mic, Main Action / End, Keyboard / Text)
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(bottom = 12.dp),
-                    horizontalArrangement = Arrangement.SpaceEvenly,
+                        .padding(bottom = 8.dp),
+                    horizontalArrangement = Arrangement.Center,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    // Mute / Unmute Button
-                    IconButton(
-                        onClick = { orchestrator.toggleMute() },
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(
-                                if (sessionState.isMicMuted) Color(0xFFEF4444).copy(alpha = 0.25f)
-                                else Color.White.copy(alpha = 0.12f),
-                                CircleShape
-                            )
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        shape = RoundedCornerShape(32.dp),
+                        shadowElevation = 3.dp,
+                        border = androidx.compose.foundation.BorderStroke(
+                            0.5.dp,
+                            MaterialTheme.colorScheme.outlineVariant
+                        ),
+                        modifier = Modifier.padding(horizontal = 8.dp)
                     ) {
-                        Icon(
-                            if (sessionState.isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
-                            contentDescription = "Toggle Mute",
-                            tint = if (sessionState.isMicMuted) Color(0xFFEF4444) else Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
-                    }
+                        Row(
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                            horizontalArrangement = Arrangement.spacedBy(20.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            // Left: Microphone / Voice Input Toggle
+                            IconButton(
+                                onClick = { orchestrator.toggleMute() },
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(
+                                        if (sessionState.isMicMuted) MaterialTheme.colorScheme.errorContainer
+                                        else MaterialTheme.colorScheme.surfaceVariant,
+                                        CircleShape
+                                    )
+                            ) {
+                                Icon(
+                                    imageVector = if (sessionState.isMicMuted) Icons.Default.MicOff else Icons.Default.Mic,
+                                    contentDescription = if (sessionState.isMicMuted) "Unmute Microphone" else "Mute Microphone",
+                                    tint = if (sessionState.isMicMuted) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
 
-                    // End Call Main Action Button
-                    IconButton(
-                        onClick = onClose,
-                        modifier = Modifier
-                            .size(72.dp)
-                            .background(Color(0xFFEF4444), CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Phone,
-                            contentDescription = "End Voice Conversation",
-                            tint = Color.White,
-                            modifier = Modifier.size(32.dp)
-                        )
-                    }
+                            // Center: Primary Voice Mode Action (End Call / Stop button)
+                            IconButton(
+                                onClick = onClose,
+                                modifier = Modifier
+                                    .size(58.dp)
+                                    .background(Color(0xFFEF4444), CircleShape)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Phone,
+                                    contentDescription = "End Voice Conversation",
+                                    tint = Color.White,
+                                    modifier = Modifier.size(28.dp)
+                                )
+                            }
 
-                    // Switch to Keyboard / Text Chat Mode
-                    IconButton(
-                        onClick = onClose,
-                        modifier = Modifier
-                            .size(56.dp)
-                            .background(Color.White.copy(alpha = 0.12f), CircleShape)
-                    ) {
-                        Icon(
-                            Icons.Default.Keyboard,
-                            contentDescription = "Switch to Text Mode",
-                            tint = Color.White,
-                            modifier = Modifier.size(26.dp)
-                        )
+                            // Right: Keyboard / Switch to Text Chat Mode
+                            IconButton(
+                                onClick = onClose,
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.surfaceVariant,
+                                        CircleShape
+                                    )
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Keyboard,
+                                    contentDescription = "Switch to Text Mode",
+                                    tint = MaterialTheme.colorScheme.onSurface,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -422,7 +566,8 @@ private fun PermissionRequestCard(
                 .padding(24.dp)
                 .fillMaxWidth(),
             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
-            shape = RoundedCornerShape(20.dp)
+            shape = RoundedCornerShape(20.dp),
+            elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
         ) {
             Column(
                 modifier = Modifier.padding(24.dp),
@@ -448,7 +593,8 @@ private fun PermissionRequestCard(
                     "Microphone Permission Required",
                     style = MaterialTheme.typography.titleLarge,
                     fontWeight = FontWeight.Bold,
-                    textAlign = TextAlign.Center
+                    textAlign = TextAlign.Center,
+                    color = MaterialTheme.colorScheme.onSurface
                 )
 
                 Spacer(Modifier.height(8.dp))
@@ -465,9 +611,10 @@ private fun PermissionRequestCard(
                 Button(
                     onClick = onRequestPermission,
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(12.dp)
+                    shape = RoundedCornerShape(12.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
                 ) {
-                    Text("Grant Permission")
+                    Text("Grant Permission", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold)
                 }
 
                 Spacer(Modifier.height(8.dp))
@@ -478,7 +625,7 @@ private fun PermissionRequestCard(
                     colors = ButtonDefaults.outlinedButtonColors(),
                     shape = RoundedCornerShape(12.dp)
                 ) {
-                    Text("Cancel")
+                    Text("Cancel", color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
         }

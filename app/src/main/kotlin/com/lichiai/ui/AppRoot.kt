@@ -27,6 +27,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import com.lichiai.ChatViewModel
 import com.lichiai.R
+import com.lichiai.agentvision.settings.AgentVisionSettingsRepository
+import com.lichiai.agentvision.ui.AgentVisionSettingsScreen
 import com.lichiai.calling.ui.CallDiagnosticsScreen
 import com.lichiai.calling.ui.CallDisambiguationDialog
 import com.lichiai.data.ProviderConfig
@@ -36,13 +38,14 @@ import com.lichiai.ui.voice.VoiceSettingsScreen
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-private enum class Screen { Chat, Settings, Providers, ProviderEdit, Assistants, Voice, VoiceSettings, HandleMyCalls, CallDiagnostics, DynamicIsland }
+private enum class Screen { Chat, Settings, Providers, ProviderEdit, Assistants, Voice, VoiceSettings, HandleMyCalls, CallDiagnostics, DynamicIsland, Skills, WebSearchSettings, AgentVision, Browser, Reminders, Terminal }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun AppRoot(vm: ChatViewModel) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val browserController = vm.browserController
     var screen by rememberSaveable { mutableStateOf(Screen.Chat) }
     var showModelPicker by rememberSaveable { mutableStateOf(false) }
     var editingProvider by remember { mutableStateOf<ProviderConfig?>(null) }
@@ -90,6 +93,24 @@ fun AppRoot(vm: ChatViewModel) {
     androidx.activity.compose.BackHandler(enabled = screen == Screen.DynamicIsland) {
         screen = Screen.Settings
     }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.Skills) {
+        screen = Screen.Settings
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.WebSearchSettings) {
+        screen = Screen.Settings
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.AgentVision) {
+        screen = Screen.Settings
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.Browser) {
+        screen = Screen.Chat
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.Reminders) {
+        screen = Screen.Chat
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.Terminal) {
+        screen = Screen.Chat
+    }
 
     val conversations by vm.conversations.collectAsState()
     val activeId by vm.activeId.collectAsState()
@@ -100,6 +121,10 @@ fun AppRoot(vm: ChatViewModel) {
     val error by vm.error.collectAsState()
     val toast by vm.toast.collectAsState()
     val fetchingId by vm.fetchingModelsFor.collectAsState()
+    val agentLiveStatus by vm.agentLiveStatus.collectAsState()
+    val webActivityState by vm.webActivityState.collectAsState()
+    val liveActivityState by vm.liveActivityState.collectAsState()
+    val activeSpeakingMessageId by vm.activeSpeakingMessageId.collectAsState()
 
     val activeConv = conversations.firstOrNull { it.id == activeId }
     val activeProvider = providers.firstOrNull { it.id == settings.activeProviderId }
@@ -119,6 +144,33 @@ fun AppRoot(vm: ChatViewModel) {
         vm.wakeDetectedEvent.collect { phrase ->
             if (screen != Screen.Voice) {
                 screen = Screen.Voice
+            }
+        }
+    }
+
+    // Auto-navigate to Browser Screen when browser intent is triggered
+    LaunchedEffect(vm) {
+        vm.browserNavigationEvent.collect {
+            if (screen != Screen.Browser) {
+                screen = Screen.Browser
+            }
+        }
+    }
+
+    // Auto-navigate to Reminders Screen when reminder list/schedule intent is triggered
+    LaunchedEffect(vm) {
+        vm.reminderNavigationEvent.collect {
+            if (screen != Screen.Reminders) {
+                screen = Screen.Reminders
+            }
+        }
+    }
+
+    // Auto-navigate to Terminal Screen when terminal intent is triggered
+    LaunchedEffect(vm) {
+        vm.terminalNavigationEvent.collect {
+            if (screen != Screen.Terminal) {
+                screen = Screen.Terminal
             }
         }
     }
@@ -157,6 +209,18 @@ fun AppRoot(vm: ChatViewModel) {
                             onOpenCallingSystem = {
                                 screen = Screen.CallDiagnostics
                                 scope.launch { drawerState.close() }
+                            },
+                            onOpenBrowser = {
+                                screen = Screen.Browser
+                                scope.launch { drawerState.close() }
+                            },
+                            onOpenReminders = {
+                                screen = Screen.Reminders
+                                scope.launch { drawerState.close() }
+                            },
+                            onOpenTerminal = {
+                                screen = Screen.Terminal
+                                scope.launch { drawerState.close() }
                             }
                         )
                     }
@@ -167,6 +231,10 @@ fun AppRoot(vm: ChatViewModel) {
                         activeProvider = activeProvider,
                         isStreaming = isStreaming,
                         streamingOverlay = streamingOverlay,
+                        agentLiveStatus = agentLiveStatus,
+                        webActivityState = webActivityState,
+                        liveActivityState = liveActivityState,
+                        activeSpeakingMessageId = activeSpeakingMessageId,
                         onMenu = { scope.launch { drawerState.open() } },
                         onSend = { text, atts -> vm.sendMessage(text, atts) },
                         onStop = { vm.stopStreaming() },
@@ -174,6 +242,7 @@ fun AppRoot(vm: ChatViewModel) {
                         onRegenerateFrom = { msgId -> vm.regenerateFrom(msgId) },
                         onDeleteMessage = { msgId -> vm.deleteMessage(msgId) },
                         onEditMessage = { msgId, newText -> vm.editMessage(msgId, newText) },
+                        onToggleSpeak = { msgId, text -> vm.toggleSpeakMessage(msgId, text) },
                         onNew = { vm.newConversation() },
                         onOpenSettings = { screen = Screen.Settings },
                         onPickModel = {
@@ -182,7 +251,8 @@ fun AppRoot(vm: ChatViewModel) {
                                 screen = Screen.ProviderEdit
                             } else showModelPicker = true
                         },
-                        onOpenVoiceMode = { screen = Screen.Voice }
+                        onOpenVoiceMode = { screen = Screen.Voice },
+                        onOpenBrowser = { screen = Screen.Browser }
                     )
                 }
             }
@@ -198,7 +268,30 @@ fun AppRoot(vm: ChatViewModel) {
                     onOpenVoiceSettings = { screen = Screen.VoiceSettings },
                     onOpenHandleMyCalls = { screen = Screen.HandleMyCalls },
                     onOpenCallDiagnostics = { screen = Screen.CallDiagnostics },
-                    onOpenDynamicIsland = { screen = Screen.DynamicIsland }
+                    onOpenDynamicIsland = { screen = Screen.DynamicIsland },
+                    onOpenSkills = { screen = Screen.Skills },
+                    onOpenWebSearch = { screen = Screen.WebSearchSettings },
+                    onOpenAgentVision = { screen = Screen.AgentVision },
+                    onOpenReminders = { screen = Screen.Reminders },
+                    onOpenTerminal = { screen = Screen.Terminal }
+                )
+            }
+            Screen.AgentVision -> {
+                val avRepo = remember { AgentVisionSettingsRepository.getInstance(vm.getApplication()) }
+                AgentVisionSettingsScreen(
+                    repository = avRepo,
+                    onBack = { screen = Screen.Settings }
+                )
+            }
+            Screen.WebSearchSettings -> {
+                WebSearchSettingsScreen(
+                    webManager = vm.webIntelligenceManager,
+                    onBack = { screen = Screen.Settings }
+                )
+            }
+            Screen.Skills -> {
+                com.lichiai.ui.skill.SkillsScreen(
+                    onBack = { screen = Screen.Settings }
                 )
             }
             Screen.HandleMyCalls -> {
@@ -281,6 +374,27 @@ fun AppRoot(vm: ChatViewModel) {
                 DynamicIslandSettingsScreen(
                     controller = vm.dynamicIslandController,
                     onBack = { screen = Screen.Settings }
+                )
+            }
+            Screen.Browser -> {
+                com.lichiai.browser.ui.BrowserScreen(
+                    controller = browserController,
+                    onOpenDrawer = {
+                        screen = Screen.Chat
+                        scope.launch { drawerState.open() }
+                    }
+                )
+            }
+            Screen.Reminders -> {
+                com.lichiai.time.ui.ReminderScreen(
+                    manager = vm.reminderManager,
+                    onBack = { screen = Screen.Chat }
+                )
+            }
+            Screen.Terminal -> {
+                com.lichiai.terminal.ui.TerminalScreen(
+                    terminalManager = vm.terminalManager,
+                    onBack = { screen = Screen.Chat }
                 )
             }
         }

@@ -224,4 +224,44 @@ class LlmClient {
             }
         }
     }
+
+    suspend fun chatCompletion(
+        provider: ProviderConfig,
+        modelId: String,
+        messages: List<ChatMessage>,
+        temperature: Float = 0.0f
+    ): String {
+        val bodyText = buildRequestBody(
+            provider = provider,
+            modelId = modelId,
+            messages = messages,
+            stream = false,
+            temperature = temperature
+        )
+
+        return client.preparePost(chatEndpoint(provider.baseUrl)) {
+            contentType(ContentType.Application.Json)
+            headers {
+                if (provider.apiKey.isNotBlank()) {
+                    append(HttpHeaders.Authorization, "Bearer ${provider.apiKey}")
+                }
+                append(HttpHeaders.Accept, "application/json")
+                for ((k, v) in provider.customHeaders) {
+                    if (k.isBlank()) continue
+                    append(k, v)
+                }
+            }
+            setBody(bodyText)
+        }.execute { response ->
+            if (!response.status.isSuccess()) {
+                val errBody = runCatching { response.bodyAsText() }.getOrDefault("")
+                throw RuntimeException("HTTP ${response.status.value}: ${errBody.take(500)}")
+            }
+            val text = response.bodyAsText()
+            val parsed = runCatching {
+                json.decodeFromString(ChatResponse.serializer(), text)
+            }.getOrNull()
+            parsed?.choices?.firstOrNull()?.message?.content ?: ""
+        }
+    }
 }

@@ -31,9 +31,13 @@ import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
+private val HEADING_REGEX = Regex("^(#{1,6})\\s+(.+)$")
+private val BULLET_REGEX = Regex("^[-*+]\\s+(.+)$")
+private val NUMBERED_REGEX = Regex("^(\\d+)[.)]\\s+(.+)$")
+
 /**
- * Minimal Markdown renderer (block + inline). No external dependency.
- * Supports headings, paragraphs, fenced code, lists, quotes, hr, bold/italic/code/strike/link.
+ * High-performance Markdown renderer (block + inline).
+ * Zero-allocation fast-paths for plain text and precompiled regular expressions.
  */
 @Composable
 fun MarkdownText(
@@ -153,10 +157,11 @@ private sealed class Block {
 }
 
 private fun parseBlocks(text: String): List<Block> {
-    val result = mutableListOf<Block>()
+    if (text.isEmpty()) return emptyList()
+    val result = ArrayList<Block>(8)
     val lines = text.split("\n")
     var i = 0
-    val paragraph = StringBuilder()
+    val paragraph = StringBuilder(128)
 
     fun flushParagraph() {
         if (paragraph.isNotBlank()) result.add(Block.Paragraph(paragraph.toString().trim()))
@@ -182,7 +187,7 @@ private fun parseBlocks(text: String): List<Block> {
         if (trimmed == "---" || trimmed == "***" || trimmed == "___") {
             flushParagraph(); result.add(Block.Hr); i++; continue
         }
-        val headingMatch = Regex("^(#{1,6})\\s+(.+)$").matchEntire(trimmed)
+        val headingMatch = HEADING_REGEX.matchEntire(trimmed)
         if (headingMatch != null) {
             flushParagraph()
             result.add(Block.Heading(headingMatch.groupValues[1].length, headingMatch.groupValues[2]))
@@ -193,11 +198,11 @@ private fun parseBlocks(text: String): List<Block> {
             result.add(Block.Quote(trimmed.removePrefix(">").trimStart()))
             i++; continue
         }
-        val bulletMatch = Regex("^[-*+]\\s+(.+)$").matchEntire(trimmed)
+        val bulletMatch = BULLET_REGEX.matchEntire(trimmed)
         if (bulletMatch != null) {
             flushParagraph(); result.add(Block.BulletItem(bulletMatch.groupValues[1])); i++; continue
         }
-        val numberedMatch = Regex("^(\\d+)[.)]\\s+(.+)$").matchEntire(trimmed)
+        val numberedMatch = NUMBERED_REGEX.matchEntire(trimmed)
         if (numberedMatch != null) {
             flushParagraph()
             result.add(Block.NumberedItem(numberedMatch.groupValues[1].toInt(), numberedMatch.groupValues[2]))
@@ -212,55 +217,84 @@ private fun parseBlocks(text: String): List<Block> {
     return result
 }
 
-private fun parseInline(text: String): AnnotatedString = buildAnnotatedString {
-    var i = 0
-    while (i < text.length) {
-        val rest = text.substring(i)
-        if (text[i] == '`') {
-            val end = text.indexOf('`', i + 1)
-            if (end > i) {
-                pushStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0x22808080), fontSize = 14.sp))
-                append(text.substring(i + 1, end)); pop()
-                i = end + 1; continue
-            }
-        }
-        if (rest.startsWith("**")) {
-            val end = text.indexOf("**", i + 2)
-            if (end > i + 2) {
-                pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
-                append(parseInline(text.substring(i + 2, end))); pop()
-                i = end + 2; continue
-            }
-        }
-        if (rest.startsWith("~~")) {
-            val end = text.indexOf("~~", i + 2)
-            if (end > i + 2) {
-                pushStyle(SpanStyle(textDecoration = TextDecoration.LineThrough))
-                append(parseInline(text.substring(i + 2, end))); pop()
-                i = end + 2; continue
-            }
-        }
-        if ((text[i] == '*' && !rest.startsWith("**")) || text[i] == '_') {
+private fun parseInline(text: String): AnnotatedString {
+    // Ultra-fast path: If text contains no Markdown syntax triggers, return immediate AnnotatedString
+    if (!text.contains('*') && !text.contains('`') && !text.contains('~') && !text.contains('_') && !text.contains('[')) {
+        return AnnotatedString(text)
+    }
+
+    return buildAnnotatedString {
+        var i = 0
+        val len = text.length
+        while (i < len) {
             val ch = text[i]
-            val end = text.indexOf(ch, i + 1)
-            if (end > i + 1 && (end + 1 >= text.length || text[end + 1] != ch)) {
-                pushStyle(SpanStyle(fontStyle = FontStyle.Italic))
-                append(text.substring(i + 1, end)); pop()
-                i = end + 1; continue
-            }
-        }
-        if (text[i] == '[') {
-            val close = text.indexOf(']', i + 1)
-            if (close > i && close + 1 < text.length && text[close + 1] == '(') {
-                val urlEnd = text.indexOf(')', close + 2)
-                if (urlEnd > close + 1) {
-                    val label = text.substring(i + 1, close)
-                    pushStyle(SpanStyle(color = Color(0xFF7C5CFF), textDecoration = TextDecoration.Underline))
-                    append(label); pop()
-                    i = urlEnd + 1; continue
+
+            // Inline Code `...`
+            if (ch == '`') {
+                val end = text.indexOf('`', i + 1)
+                if (end > i) {
+                    pushStyle(SpanStyle(fontFamily = FontFamily.Monospace, background = Color(0x22808080), fontSize = 14.sp))
+                    append(text.substring(i + 1, end))
+                    pop()
+                    i = end + 1
+                    continue
                 }
             }
+
+            // Bold **...**
+            if (ch == '*' && i + 1 < len && text[i + 1] == '*') {
+                val end = text.indexOf("**", i + 2)
+                if (end > i + 1) {
+                    pushStyle(SpanStyle(fontWeight = FontWeight.Bold))
+                    append(text.substring(i + 2, end))
+                    pop()
+                    i = end + 2
+                    continue
+                }
+            }
+
+            // Strikethrough ~~...~~
+            if (ch == '~' && i + 1 < len && text[i + 1] == '~') {
+                val end = text.indexOf("~~", i + 2)
+                if (end > i + 1) {
+                    pushStyle(SpanStyle(textDecoration = TextDecoration.LineThrough))
+                    append(text.substring(i + 2, end))
+                    pop()
+                    i = end + 2
+                    continue
+                }
+            }
+
+            // Italic *...* or _..._
+            if (ch == '*' || ch == '_') {
+                val end = text.indexOf(ch, i + 1)
+                if (end > i + 1 && (end + 1 >= len || text[end + 1] != ch)) {
+                    pushStyle(SpanStyle(fontStyle = FontStyle.Italic))
+                    append(text.substring(i + 1, end))
+                    pop()
+                    i = end + 1
+                    continue
+                }
+            }
+
+            // Link [text](url)
+            if (ch == '[') {
+                val closeBracket = text.indexOf(']', i + 1)
+                if (closeBracket > i && closeBracket + 1 < len && text[closeBracket + 1] == '(') {
+                    val urlEnd = text.indexOf(')', closeBracket + 2)
+                    if (urlEnd > closeBracket + 1) {
+                        val label = text.substring(i + 1, closeBracket)
+                        pushStyle(SpanStyle(color = Color(0xFF7C5CFF), textDecoration = TextDecoration.Underline))
+                        append(label)
+                        pop()
+                        i = urlEnd + 1
+                        continue
+                    }
+                }
+            }
+
+            append(ch)
+            i++
         }
-        append(text[i]); i++
     }
 }

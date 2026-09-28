@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.PhoneInTalk
 import androidx.compose.material.icons.filled.PhonePaused
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.SettingsPhone
 import androidx.compose.material.icons.filled.Stop
@@ -280,6 +281,45 @@ fun DynamicIslandSurface(
     }
 }
 
+enum class CapsuleVisualState {
+    IDLE,
+    LISTENING,
+    THINKING,
+    SPEAKING,
+    AGENT_WORKING,
+    WEB_RESEARCH,
+    CALL_INCOMING,
+    CALL_ACTIVE,
+    CALL_ENDING,
+    ERROR
+}
+
+private fun resolveCapsuleVisualState(state: LichiAssistantState, callSession: CallSessionInfo): CapsuleVisualState {
+    return when {
+        callSession.callState.isRinging -> CapsuleVisualState.CALL_INCOMING
+        callSession.callState.isConnectedOrActive -> CapsuleVisualState.CALL_ACTIVE
+        callSession.callState.isTerminal || callSession.callState == CallState.ENDING -> CapsuleVisualState.CALL_ENDING
+        callSession.callState.isOutgoing -> CapsuleVisualState.CALL_ACTIVE
+        state.uiState == LichiUiState.ERROR || state.uiState == LichiUiState.MIC_UNAVAILABLE -> CapsuleVisualState.ERROR
+        state.uiState == LichiUiState.THINKING -> CapsuleVisualState.THINKING
+        state.uiState == LichiUiState.SPEAKING -> CapsuleVisualState.SPEAKING
+        state.uiState == LichiUiState.LISTENING || state.uiState == LichiUiState.WAKE_LISTENING ||
+                state.uiState == LichiUiState.WAKE_DETECTED || state.uiState == LichiUiState.WAITING_FOR_CALL_COMMAND -> CapsuleVisualState.LISTENING
+        state.uiState == LichiUiState.TOOL_EXECUTION -> {
+            val tool = (state.toolName ?: state.statusText).lowercase()
+            if (tool.contains("web") || tool.contains("search") || tool.contains("browser") || tool.contains("google")) {
+                CapsuleVisualState.WEB_RESEARCH
+            } else {
+                CapsuleVisualState.AGENT_WORKING
+            }
+        }
+        state.uiState == LichiUiState.CALL_DECISION_REQUIRED -> CapsuleVisualState.CALL_INCOMING
+        state.uiState == LichiUiState.CALLING -> CapsuleVisualState.CALL_ACTIVE
+        state.uiState == LichiUiState.TRANSCRIBING -> CapsuleVisualState.THINKING
+        else -> CapsuleVisualState.IDLE
+    }
+}
+
 @Composable
 private fun CollapsedIslandContent(
     state: LichiAssistantState,
@@ -289,66 +329,202 @@ private fun CollapsedIslandContent(
     primaryColor: Color,
     iconColor: Color
 ) {
+    val visualState = remember(state.uiState, state.statusText, state.toolName, callSession.callState) {
+        resolveCapsuleVisualState(state, callSession)
+    }
+
+    val title: String
+    val subtitle: String
+    val icon: androidx.compose.ui.graphics.vector.ImageVector
+    val iconTint: Color
+    val iconBgColor: Color
+
+    when (visualState) {
+        CapsuleVisualState.CALL_INCOMING -> {
+            title = "Incoming Call"
+            subtitle = callSession.displayTitle.ifBlank { "Unknown Caller" }
+            icon = Icons.Default.Call
+            iconTint = Color(0xFF81C784)
+            iconBgColor = Color(0xFF2E7D32).copy(alpha = 0.35f)
+        }
+        CapsuleVisualState.CALL_ACTIVE -> {
+            title = callSession.displayTitle.ifBlank { "Active Call" }
+            subtitle = callSession.formattedDuration
+            icon = Icons.Default.PhoneInTalk
+            iconTint = Color(0xFF64B5F6)
+            iconBgColor = Color(0xFF1565C0).copy(alpha = 0.32f)
+        }
+        CapsuleVisualState.CALL_ENDING -> {
+            title = "Call Ended"
+            subtitle = callSession.displayTitle.ifBlank { "Lichi Call" }
+            icon = Icons.Default.CallEnd
+            iconTint = Color(0xFFE57373)
+            iconBgColor = Color(0xFFC62828).copy(alpha = 0.3f)
+        }
+        CapsuleVisualState.LISTENING -> {
+            if (state.uiState == LichiUiState.WAKE_LISTENING) {
+                title = "Listening"
+                subtitle = "for wake word"
+            } else if (state.uiState == LichiUiState.WAKE_DETECTED) {
+                title = "Listening"
+                subtitle = state.statusText
+            } else {
+                title = "Listening"
+                subtitle = if (state.transcript.isNotBlank()) state.transcript else "Speak now"
+            }
+            icon = Icons.Default.Mic
+            iconTint = primaryColor
+            iconBgColor = primaryColor.copy(alpha = 0.22f)
+        }
+        CapsuleVisualState.THINKING -> {
+            title = "Thinking..."
+            subtitle = "Lichi"
+            icon = Icons.Default.AutoAwesome
+            iconTint = primaryColor
+            iconBgColor = primaryColor.copy(alpha = 0.22f)
+        }
+        CapsuleVisualState.SPEAKING -> {
+            title = "Speaking"
+            subtitle = if (state.responsePreview.isNotBlank()) state.responsePreview else "Lichi"
+            icon = Icons.Default.VolumeUp
+            iconTint = primaryColor
+            iconBgColor = primaryColor.copy(alpha = 0.22f)
+        }
+        CapsuleVisualState.AGENT_WORKING -> {
+            title = "Agent Working"
+            subtitle = state.toolName ?: state.statusText.ifBlank { "Executing task..." }
+            icon = Icons.Default.AutoAwesome
+            iconTint = Color(0xFF80D8FF)
+            iconBgColor = Color(0xFF0091EA).copy(alpha = 0.25f)
+        }
+        CapsuleVisualState.WEB_RESEARCH -> {
+            title = "Web Research"
+            subtitle = state.toolName ?: state.statusText.ifBlank { "Searching online..." }
+            icon = Icons.Default.Search
+            iconTint = Color(0xFF82B1FF)
+            iconBgColor = Color(0xFF2962FF).copy(alpha = 0.25f)
+        }
+        CapsuleVisualState.ERROR -> {
+            title = if (state.uiState == LichiUiState.MIC_UNAVAILABLE) "Mic In Use" else "Attention"
+            subtitle = state.errorText ?: state.statusText.ifBlank { "Check status" }
+            icon = if (state.uiState == LichiUiState.MIC_UNAVAILABLE) Icons.Default.MicOff else Icons.Default.Warning
+            iconTint = if (state.uiState == LichiUiState.MIC_UNAVAILABLE) Color(0xFFFFB74D) else Color(0xFFFF8A80)
+            iconBgColor = iconTint.copy(alpha = 0.2f)
+        }
+        CapsuleVisualState.IDLE -> {
+            title = "Lichi"
+            subtitle = "Ready"
+            icon = Icons.Default.AutoAwesome
+            iconTint = iconColor.copy(alpha = 0.9f)
+            iconBgColor = iconColor.copy(alpha = 0.15f)
+        }
+    }
+
+    // Subtle micro-pulse for listening & call incoming states (battery efficient: stopped when state ends or low power)
+    val shouldPulse = !config.lowPowerMode && (
+        visualState == CapsuleVisualState.LISTENING ||
+        visualState == CapsuleVisualState.CALL_INCOMING
+    )
+
+    val pulseTransition = rememberInfiniteTransition(label = "capsulePulse")
+    val pulseScale by if (shouldPulse) {
+        pulseTransition.animateFloat(
+            initialValue = 0.92f,
+            targetValue = 1.08f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(900, easing = FastOutSlowInEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "pulseScale"
+        )
+    } else {
+        remember { mutableStateOf(1.0f) }
+    }
+
     Row(
         modifier = Modifier.fillMaxSize(),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+        verticalAlignment = Alignment.CenterVertically
     ) {
-        // Leading Section
-        if (callSession.isCallActiveOrRinging) {
-            CallLeadingIcon(callSession = callSession, config = config)
-        } else {
-            LeadingStateIcon(
-                state = state,
-                config = config,
-                iconColor = iconColor,
-                primaryColor = primaryColor
+        // Leading Section: Compact rounded chip with icon
+        Box(
+            modifier = Modifier
+                .size(28.dp)
+                .graphicsLayer {
+                    scaleX = pulseScale
+                    scaleY = pulseScale
+                }
+                .clip(CircleShape)
+                .background(iconBgColor),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                imageVector = icon,
+                contentDescription = title,
+                tint = iconTint,
+                modifier = Modifier.size(15.dp)
             )
         }
 
         Spacer(Modifier.width(8.dp))
 
-        // Center Text
-        val labelText = when {
-            callSession.callState.isRinging -> "Incoming: ${callSession.displayTitle}"
-            callSession.callState.isConnectedOrActive -> "${callSession.displayTitle} (${callSession.formattedDuration})"
-            callSession.callState.isOutgoing -> "Calling ${callSession.displayTitle}..."
-            state.uiState == LichiUiState.LISTENING && state.transcript.isNotBlank() -> state.transcript
-            state.uiState == LichiUiState.SPEAKING && state.responsePreview.isNotBlank() -> state.responsePreview
-            else -> state.statusText
-        }
-
+        // Center 2-Line Text: Title + Subtitle
         if (config.shape != IslandShape.CIRCLE) {
-            Text(
-                text = labelText,
-                style = MaterialTheme.typography.labelLarge.copy(
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    letterSpacing = 0.2.sp
-                ),
-                color = if (callSession.callState.isRinging) Color(0xFF81C784) else textColor,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f)
-            )
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        letterSpacing = 0.2.sp
+                    ),
+                    color = if (visualState == CapsuleVisualState.CALL_INCOMING) Color(0xFF81C784) else textColor,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Normal
+                    ),
+                    color = textColor.copy(alpha = 0.72f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         } else {
             Spacer(Modifier.weight(1f))
         }
 
         // Trailing Section: Dynamic Mini Waveform / Activity Indicator
-        if (callSession.callState.isConnectedOrActive) {
-            Spacer(Modifier.width(8.dp))
-            CallPulseDot(color = Color(0xFF81C784), lowPowerMode = config.lowPowerMode)
-        } else if (config.showWaveform && (state.uiState == LichiUiState.LISTENING || state.uiState == LichiUiState.SPEAKING)) {
-            Spacer(Modifier.width(8.dp))
-            MiniWaveform(
-                rms = state.rmsLevel,
-                color = primaryColor,
-                lowPowerMode = config.lowPowerMode
-            )
-        } else if (state.uiState == LichiUiState.THINKING) {
-            Spacer(Modifier.width(8.dp))
-            ThinkingPulseDot(color = primaryColor, lowPowerMode = config.lowPowerMode)
+        when {
+            callSession.callState.isConnectedOrActive -> {
+                Spacer(Modifier.width(6.dp))
+                CallPulseDot(color = Color(0xFF81C784), lowPowerMode = config.lowPowerMode)
+            }
+            config.showWaveform && (visualState == CapsuleVisualState.LISTENING || visualState == CapsuleVisualState.SPEAKING) -> {
+                Spacer(Modifier.width(6.dp))
+                MiniWaveform(
+                    rms = if (visualState == CapsuleVisualState.SPEAKING) state.rmsLevel.coerceAtLeast(0.4f) else state.rmsLevel,
+                    color = primaryColor,
+                    lowPowerMode = config.lowPowerMode
+                )
+            }
+            visualState == CapsuleVisualState.THINKING -> {
+                Spacer(Modifier.width(6.dp))
+                ThinkingPulseDot(color = primaryColor, lowPowerMode = config.lowPowerMode)
+            }
+            visualState == CapsuleVisualState.AGENT_WORKING -> {
+                Spacer(Modifier.width(6.dp))
+                ThinkingPulseDot(color = Color(0xFF80D8FF), lowPowerMode = config.lowPowerMode)
+            }
+            visualState == CapsuleVisualState.WEB_RESEARCH -> {
+                Spacer(Modifier.width(6.dp))
+                ThinkingPulseDot(color = Color(0xFF82B1FF), lowPowerMode = config.lowPowerMode)
+            }
         }
     }
 }

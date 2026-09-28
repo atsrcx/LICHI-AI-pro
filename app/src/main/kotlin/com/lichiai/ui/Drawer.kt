@@ -1,5 +1,6 @@
 package com.lichiai.ui
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -23,13 +24,18 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -41,6 +47,7 @@ import androidx.compose.material3.LocalTextStyle
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -51,6 +58,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.res.stringResource
@@ -60,7 +68,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lichiai.R
 import com.lichiai.data.Conversation
+import java.text.SimpleDateFormat
 import java.util.Calendar
+import java.util.Date
+import java.util.Locale
+
 @Composable
 fun GlassDrawer(
     conversations: List<Conversation>,
@@ -71,7 +83,10 @@ fun GlassDrawer(
     onRename: (String, String) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenVoiceMode: () -> Unit = {},
-    onOpenCallingSystem: () -> Unit = {}
+    onOpenCallingSystem: () -> Unit = {},
+    onOpenBrowser: () -> Unit = {},
+    onOpenReminders: () -> Unit = {},
+    onOpenTerminal: () -> Unit = {}
 ) {
     var renameTarget by remember { mutableStateOf<Conversation?>(null) }
     var deleteTarget by remember { mutableStateOf<Conversation?>(null) }
@@ -85,60 +100,119 @@ fun GlassDrawer(
 
     ModalDrawerSheet(
         drawerContainerColor = MaterialTheme.colorScheme.background,
-        modifier = Modifier.fillMaxSize().width(312.dp)
+        modifier = Modifier.fillMaxSize().width(320.dp)
     ) {
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(WindowInsets.statusBars.asPaddingValues())
         ) {
-            // Header
+            // 1. Header: Lichi brand + New chat action
             Row(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
                 Box(
                     modifier = Modifier
                         .size(36.dp)
-                        .clip(RoundedCornerShape(11.dp))
-                        .background(MaterialTheme.colorScheme.primary),
+                        .clip(RoundedCornerShape(10.dp))
+                        .background(
+                            Brush.linearGradient(
+                                listOf(
+                                    MaterialTheme.colorScheme.primary,
+                                    MaterialTheme.colorScheme.tertiary
+                                )
+                            )
+                        ),
                     contentAlignment = Alignment.Center
                 ) {
-                    Text("M", color = MaterialTheme.colorScheme.onPrimary, fontWeight = FontWeight.Bold)
+                    Icon(
+                        Icons.Default.AutoAwesome,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
                 }
                 Spacer(Modifier.width(10.dp))
-                Text(
-                    stringResource(R.string.app_name),
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.weight(1f),
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-                IconButton(onClick = onNew) {
-                    Icon(Icons.Default.Edit, contentDescription = stringResource(R.string.new_chat))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        stringResource(R.string.app_name),
+                        style = MaterialTheme.typography.titleMedium.copy(
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    Text(
+                        "AI Companion",
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Box(
+                    modifier = Modifier
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(MaterialTheme.colorScheme.primaryContainer)
+                        .clickable(onClick = onNew)
+                        .padding(horizontal = 10.dp, vertical = 6.dp)
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Icon(
+                            Icons.Default.Add,
+                            contentDescription = stringResource(R.string.new_chat),
+                            tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                            modifier = Modifier.size(15.dp)
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            stringResource(R.string.new_chat),
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.SemiBold, fontSize = 12.sp),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
                 }
             }
 
-            // Search box
+            // 2. Compact Feature Shortcut Boxes Grid (Placed near the top above history)
+            FeatureShortcutsSection(
+                onOpenVoiceMode = onOpenVoiceMode,
+                onOpenCallingSystem = onOpenCallingSystem,
+                onOpenBrowser = onOpenBrowser,
+                onOpenReminders = onOpenReminders,
+                onOpenTerminal = onOpenTerminal,
+                onOpenSettings = onOpenSettings
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            // 3. Search box with clear button
             Box(
                 modifier = Modifier
-                    .padding(horizontal = 12.dp, vertical = 4.dp)
+                    .padding(horizontal = 14.dp, vertical = 4.dp)
                     .fillMaxWidth()
                     .clip(RoundedCornerShape(14.dp))
-                    .background(MaterialTheme.colorScheme.surfaceVariant)
-                    .padding(horizontal = 12.dp, vertical = 10.dp)
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f))
+                    .border(
+                        0.5.dp,
+                        MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f),
+                        RoundedCornerShape(14.dp)
+                    )
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         Icons.Default.Search, contentDescription = null,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.size(18.dp)
+                        modifier = Modifier.size(17.dp)
                     )
                     Spacer(Modifier.width(8.dp))
                     BasicTextField(
                         value = query, onValueChange = { query = it },
-                        modifier = Modifier.fillMaxWidth(),
+                        modifier = Modifier.weight(1f),
                         textStyle = LocalTextStyle.current.copy(
-                            color = MaterialTheme.colorScheme.onSurface, fontSize = 14.sp
+                            color = MaterialTheme.colorScheme.onSurface, fontSize = 13.sp
                         ),
                         cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                         singleLine = true,
@@ -146,18 +220,32 @@ fun GlassDrawer(
                             if (query.isEmpty()) {
                                 Text(
                                     stringResource(R.string.search_chats),
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    fontSize = 14.sp
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                                    fontSize = 13.sp
                                 )
                             }
                             inner()
                         }
                     )
+                    if (query.isNotEmpty()) {
+                        IconButton(
+                            onClick = { query = "" },
+                            modifier = Modifier.size(18.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Close,
+                                contentDescription = "Clear search",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.size(15.dp)
+                            )
+                        }
+                    }
                 }
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(6.dp))
 
+            // 4. Conversation History List (Primary content area)
             if (filtered.isEmpty()) {
                 Box(
                     modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -166,30 +254,37 @@ fun GlassDrawer(
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         Icon(
                             Icons.Outlined.ChatBubbleOutline, contentDescription = null,
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.size(40.dp)
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                            modifier = Modifier.size(36.dp)
                         )
                         Spacer(Modifier.height(8.dp))
                         Text(
-                            if (query.isBlank()) "No chats yet" else "No matches",
+                            if (query.isBlank()) "No chats yet" else "No matching chats",
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             style = MaterialTheme.typography.bodyMedium
                         )
                     }
                 }
             } else {
-                LazyColumn(modifier = Modifier.weight(1f)) {
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(bottom = 12.dp)
+                ) {
                     grouped.forEach { (labelKey, items) ->
                         item(key = "h-$labelKey") {
                             Text(
                                 stringResource(labelKey),
-                                modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                modifier = Modifier.padding(horizontal = 18.dp, vertical = 6.dp),
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.SemiBold,
+                                    letterSpacing = 0.5.sp,
+                                    fontSize = 11.sp
+                                ),
+                                color = MaterialTheme.colorScheme.primary
                             )
                         }
                         items(items, key = { it.id }) { conv ->
-                            ChatRow(
+                            ChatHistoryCard(
                                 conv = conv,
                                 selected = conv.id == activeId,
                                 onClick = { onSelect(conv.id) },
@@ -201,63 +296,6 @@ fun GlassDrawer(
                 }
             }
 
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant, thickness = 0.5.dp)
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenVoiceMode)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.Headphones, contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    "Voice Conversation Mode",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenCallingSystem)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.Call, contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    "Call & Contacts System",
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.primary,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable(onClick = onOpenSettings)
-                    .padding(horizontal = 16.dp, vertical = 14.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Icon(
-                    Icons.Default.Settings, contentDescription = null,
-                    tint = MaterialTheme.colorScheme.onSurface
-                )
-                Spacer(Modifier.width(12.dp))
-                Text(
-                    stringResource(R.string.settings),
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
-                )
-            }
             Spacer(Modifier.padding(WindowInsets.navigationBars.asPaddingValues()))
         }
     }
@@ -298,8 +336,175 @@ fun GlassDrawer(
     }
 }
 
+/**
+ * Responsive 5 Feature Shortcuts Box Section
+ * Compact Material 3 cards for Voice, Calls, Browser, Reminders, and Settings.
+ */
 @Composable
-private fun ChatRow(
+private fun FeatureShortcutsSection(
+    onOpenVoiceMode: () -> Unit,
+    onOpenCallingSystem: () -> Unit,
+    onOpenBrowser: () -> Unit,
+    onOpenReminders: () -> Unit,
+    onOpenTerminal: () -> Unit,
+    onOpenSettings: () -> Unit
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 14.dp, vertical = 2.dp),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        // Row 1: Voice Mode & Calls System
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            FeatureShortcutBox(
+                title = "Voice Mode",
+                subtitle = "Conversations",
+                icon = Icons.Default.Headphones,
+                iconTint = MaterialTheme.colorScheme.primary,
+                iconBg = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.6f),
+                modifier = Modifier.weight(1f),
+                onClick = onOpenVoiceMode
+            )
+            FeatureShortcutBox(
+                title = "Calls System",
+                subtitle = "Dialer & Tasks",
+                icon = Icons.Default.Call,
+                iconTint = Color(0xFF2E7D32),
+                iconBg = Color(0xFFE8F5E9),
+                modifier = Modifier.weight(1f),
+                onClick = onOpenCallingSystem
+            )
+        }
+
+        // Row 2: Lichi Browser & Reminders/Alarms
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            FeatureShortcutBox(
+                title = "Lichi Browser",
+                subtitle = "Web Navigator",
+                icon = com.lichiai.browser.ui.BrowserGlobeIcon,
+                iconTint = Color(0xFF1565C0),
+                iconBg = Color(0xFFE3F2FD),
+                modifier = Modifier.weight(1f),
+                onClick = onOpenBrowser
+            )
+            FeatureShortcutBox(
+                title = "Reminders",
+                subtitle = "Alarms & Engine",
+                icon = Icons.Default.Notifications,
+                iconTint = Color(0xFFE65100),
+                iconBg = Color(0xFFFFF3E0),
+                modifier = Modifier.weight(1f),
+                onClick = onOpenReminders
+            )
+        }
+
+        // Row 3: Terminal V2 & Settings
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
+        ) {
+            FeatureShortcutBox(
+                title = "Terminal V2",
+                subtitle = "Termux, SSH & PTY",
+                icon = Icons.Default.Terminal,
+                iconTint = Color(0xFF00E676),
+                iconBg = Color(0xFF1E293B),
+                modifier = Modifier.weight(1f),
+                onClick = onOpenTerminal
+            )
+            FeatureShortcutBox(
+                title = stringResource(R.string.settings),
+                subtitle = "Providers & AI",
+                icon = Icons.Default.Settings,
+                iconTint = MaterialTheme.colorScheme.onSurfaceVariant,
+                iconBg = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                modifier = Modifier.weight(1f),
+                onClick = onOpenSettings
+            )
+        }
+    }
+}
+
+@Composable
+private fun FeatureShortcutBox(
+    title: String,
+    subtitle: String,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    iconTint: Color,
+    iconBg: Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit
+) {
+    Surface(
+        modifier = modifier
+            .height(48.dp)
+            .clip(RoundedCornerShape(12.dp))
+            .clickable(onClick = onClick),
+        shape = RoundedCornerShape(12.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f),
+        border = BorderStroke(
+            0.5.dp,
+            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f)
+        )
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(horizontal = 10.dp, vertical = 6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(30.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(iconBg),
+                contentAlignment = Alignment.Center
+            ) {
+                Icon(
+                    imageVector = icon,
+                    contentDescription = title,
+                    tint = iconTint,
+                    modifier = Modifier.size(16.dp)
+                )
+            }
+            Spacer(Modifier.width(8.dp))
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.labelMedium.copy(
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 12.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = subtitle,
+                    style = MaterialTheme.typography.bodySmall.copy(
+                        fontSize = 10.sp
+                    ),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ChatHistoryCard(
     conv: Conversation,
     selected: Boolean,
     onClick: () -> Unit,
@@ -307,47 +512,187 @@ private fun ChatRow(
     onDelete: () -> Unit
 ) {
     var menuOpen by remember { mutableStateOf(false) }
-    val bg = if (selected) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent
-    Row(
+
+    val containerBg = if (selected) {
+        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.25f)
+    }
+    val borderStroke = if (selected) {
+        BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.45f))
+    } else {
+        BorderStroke(0.5.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.2f))
+    }
+
+    val timeLabel = remember(conv.updatedAt) {
+        formatRelativeTime(conv.updatedAt)
+    }
+
+    val lastMsg = conv.messages.lastOrNull()
+    val previewText = remember(lastMsg?.content) {
+        lastMsg?.content?.replace("\n", " ")?.trim()?.take(65)
+            ?: "Empty conversation"
+    }
+
+    Box(
         modifier = Modifier
-            .padding(horizontal = 8.dp, vertical = 1.dp)
+            .padding(horizontal = 10.dp, vertical = 3.dp)
             .fillMaxWidth()
-            .clip(RoundedCornerShape(12.dp))
-            .background(bg)
+            .clip(RoundedCornerShape(14.dp))
+            .background(containerBg)
+            .border(borderStroke, RoundedCornerShape(14.dp))
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically
+            .padding(horizontal = 12.dp, vertical = 9.dp)
     ) {
-        Text(
-            conv.title.ifBlank { "Untitled" },
-            modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            style = MaterialTheme.typography.bodyLarge,
-            color = MaterialTheme.colorScheme.onSurface
-        )
-        Box {
-            IconButton(onClick = { menuOpen = true }, modifier = Modifier.size(28.dp)) {
-                Icon(
-                    Icons.Default.MoreVert, contentDescription = "more",
-                    modifier = Modifier.size(18.dp),
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Selected active indicator or leading icon chip
+            if (selected) {
+                Box(
+                    modifier = Modifier
+                        .size(width = 3.5.dp, height = 36.dp)
+                        .clip(RoundedCornerShape(2.dp))
+                        .background(MaterialTheme.colorScheme.primary)
                 )
+                Spacer(Modifier.width(8.dp))
+            } else {
+                Box(
+                    modifier = Modifier
+                        .size(32.dp)
+                        .clip(RoundedCornerShape(9.dp))
+                        .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f)),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        Icons.Outlined.ChatBubbleOutline,
+                        contentDescription = null,
+                        modifier = Modifier.size(15.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                    )
+                }
+                Spacer(Modifier.width(10.dp))
             }
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.rename)) },
-                    leadingIcon = { Icon(Icons.Default.Edit, null) },
-                    onClick = { menuOpen = false; onRename() }
-                )
-                DropdownMenuItem(
-                    text = { Text(stringResource(R.string.delete)) },
-                    leadingIcon = { Icon(Icons.Default.Delete, null) },
-                    onClick = { menuOpen = false; onDelete() }
-                )
+
+            // Text Column: Title, Preview, and Metadata
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = conv.title.ifBlank { "New Chat" },
+                        modifier = Modifier.weight(1f, fill = false),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodyMedium.copy(
+                            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium
+                        ),
+                        color = MaterialTheme.colorScheme.onSurface
+                    )
+                    if (timeLabel.isNotBlank()) {
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            text = timeLabel,
+                            style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f)
+                        )
+                    }
+                }
+
+                Spacer(Modifier.height(2.dp))
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = previewText,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
+                    )
+                    if (conv.messages.isNotEmpty()) {
+                        Spacer(Modifier.width(6.dp))
+                        Box(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.8f))
+                                .padding(horizontal = 5.dp, vertical = 1.dp)
+                        ) {
+                            Text(
+                                text = "${conv.messages.size}",
+                                style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.width(4.dp))
+
+            // Action Menu
+            Box {
+                IconButton(
+                    onClick = { menuOpen = true },
+                    modifier = Modifier.size(30.dp)
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert, contentDescription = "More options",
+                        modifier = Modifier.size(17.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
+                    )
+                }
+                DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.rename)) },
+                        leadingIcon = { Icon(Icons.Default.Edit, null) },
+                        onClick = { menuOpen = false; onRename() }
+                    )
+                    DropdownMenuItem(
+                        text = { Text(stringResource(R.string.delete)) },
+                        leadingIcon = { Icon(Icons.Default.Delete, null) },
+                        onClick = { menuOpen = false; onDelete() }
+                    )
+                }
             }
         }
     }
+}
+
+private fun formatRelativeTime(millis: Long): String {
+    if (millis <= 0L) return ""
+    val now = System.currentTimeMillis()
+    val diff = (now - millis).coerceAtLeast(0L)
+    val cal = Calendar.getInstance().apply { timeInMillis = millis }
+    val nowCal = Calendar.getInstance()
+
+    val isToday = cal.get(Calendar.YEAR) == nowCal.get(Calendar.YEAR) &&
+            cal.get(Calendar.DAY_OF_YEAR) == nowCal.get(Calendar.DAY_OF_YEAR)
+    if (isToday) {
+        val sdf = SimpleDateFormat("h:mm a", Locale.getDefault())
+        return sdf.format(Date(millis))
+    }
+    val yesterdayCal = Calendar.getInstance().apply { add(Calendar.DAY_OF_YEAR, -1) }
+    val isYesterday = cal.get(Calendar.YEAR) == yesterdayCal.get(Calendar.YEAR) &&
+            cal.get(Calendar.DAY_OF_YEAR) == yesterdayCal.get(Calendar.DAY_OF_YEAR)
+    if (isYesterday) {
+        return "Yesterday"
+    }
+    if (diff < 7 * 86_400_000L) {
+        val days = (diff / 86_400_000L).coerceAtLeast(1)
+        return "${days}d ago"
+    }
+    val sdf = SimpleDateFormat("MMM d", Locale.getDefault())
+    return sdf.format(Date(millis))
 }
 
 private fun groupConversationsByDate(

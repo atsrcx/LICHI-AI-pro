@@ -22,7 +22,13 @@ data class AppSettings(
     val stream: Boolean = true,
     val language: String = "system",          // system | en | zh
     val dynamicColor: Boolean = true,
-    val themeMode: String = "system"          // system | light | dark
+    val themeMode: String = "system",         // system | light | dark
+    val orchestratorMode: String = "ENABLED", // ENABLED | CANARY | SHADOW | DISABLED
+    val apifyApiToken: String = "",
+    val spyEnabled: Boolean = true,
+    val spyFreeFirstOnly: Boolean = true,
+    val spyMaxDatasetItems: Int = 10,
+    val spyTimeoutSeconds: Long = 120L
 )
 
 class SettingsRepository(private val context: Context) {
@@ -36,6 +42,11 @@ class SettingsRepository(private val context: Context) {
         val LANG = stringPreferencesKey("language")
         val DYNAMIC = booleanPreferencesKey("dynamic_color")
         val THEME = stringPreferencesKey("theme_mode")
+        val ORCHESTRATOR = stringPreferencesKey("orchestrator_mode")
+        val APIFY_TOKEN = stringPreferencesKey("apify_api_token")
+        val SPY_ENABLED = booleanPreferencesKey("spy_enabled")
+        val SPY_FREE_FIRST = booleanPreferencesKey("spy_free_first")
+        val SPY_MAX_ITEMS = stringPreferencesKey("spy_max_items")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { p -> read(p) }
@@ -49,7 +60,12 @@ class SettingsRepository(private val context: Context) {
         stream = p[Keys.STREAM] ?: true,
         language = p[Keys.LANG] ?: "system",
         dynamicColor = p[Keys.DYNAMIC] ?: true,
-        themeMode = p[Keys.THEME] ?: "system"
+        themeMode = p[Keys.THEME] ?: "system",
+        orchestratorMode = p[Keys.ORCHESTRATOR] ?: "ENABLED",
+        apifyApiToken = p[Keys.APIFY_TOKEN] ?: "",
+        spyEnabled = p[Keys.SPY_ENABLED] ?: true,
+        spyFreeFirstOnly = p[Keys.SPY_FREE_FIRST] ?: true,
+        spyMaxDatasetItems = p[Keys.SPY_MAX_ITEMS]?.toIntOrNull() ?: 10
     )
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
@@ -64,6 +80,11 @@ class SettingsRepository(private val context: Context) {
             p[Keys.LANG] = next.language
             p[Keys.DYNAMIC] = next.dynamicColor
             p[Keys.THEME] = next.themeMode
+            p[Keys.ORCHESTRATOR] = next.orchestratorMode
+            p[Keys.APIFY_TOKEN] = next.apifyApiToken
+            p[Keys.SPY_ENABLED] = next.spyEnabled
+            p[Keys.SPY_FREE_FIRST] = next.spyFreeFirstOnly
+            p[Keys.SPY_MAX_ITEMS] = next.spyMaxDatasetItems.toString()
         }
     }
 }

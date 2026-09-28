@@ -9,7 +9,7 @@ class CallIntentResolver {
 
     fun resolve(text: String): CallIntent {
         val trimmed = text.trim()
-        if (trimmed.isBlank()) {
+        if (trimmed.isBlank() || com.lichiai.spy.core.SpyGate.isSpyTriggered(trimmed)) {
             return CallIntent(action = CallAction.NO_CALL_INTENT, originalText = text)
         }
 
