@@ -3,6 +3,7 @@ package com.lichiai.spy.interpreter
 import com.lichiai.spy.core.PlatformType
 import com.lichiai.spy.core.SpyOperation
 import com.lichiai.spy.core.SpyTask
+import com.lichiai.spy.core.TargetType
 import com.lichiai.spy.model.PlatformCatalog
 import java.util.Locale
 
@@ -15,14 +16,44 @@ object SpyIntentParser {
     fun parse(cleanQuery: String, requestId: String = "", messageId: String = ""): SpyTask {
         val lower = cleanQuery.lowercase(Locale.ROOT)
 
+        val phoneTarget = TargetExtractor.extractPhoneNumber(cleanQuery)
+        val emailTarget = TargetExtractor.extractEmail(cleanQuery)
+
+        val targetType = when {
+            emailTarget != null -> TargetType.EMAIL
+            phoneTarget != null -> TargetType.PHONE_NUMBER
+            cleanQuery.contains("http://") || cleanQuery.contains("https://") -> TargetType.URL
+            cleanQuery.contains("r/") -> TargetType.SUBREDDIT
+            else -> TargetType.HANDLE_OR_USERNAME
+        }
+
         // 1. Detect platform
-        val platform = detectPlatform(lower)
+        val explicitPlatform = detectPlatform(lower)
+        val platform = if (explicitPlatform != null) {
+            explicitPlatform
+        } else if (targetType == TargetType.PHONE_NUMBER || targetType == TargetType.EMAIL) {
+            PlatformType.UNKNOWN
+        } else {
+            PlatformType.GENERIC_WEB
+        }
 
         // 2. Detect operation
-        val operation = detectOperation(lower)
+        val operation = if (lower.contains("preview") || lower.contains("profile preview")) {
+            SpyOperation.PROFILE_PREVIEW
+        } else if (targetType == TargetType.EMAIL) {
+            SpyOperation.PUBLIC_EMAIL_LOOKUP
+        } else if (targetType == TargetType.PHONE_NUMBER) {
+            SpyOperation.PUBLIC_PHONE_LOOKUP
+        } else {
+            detectOperation(lower)
+        }
 
-        // 3. Extract target (username, handle, query, or channel) using language-aware extractor
-        val target = TargetExtractor.extract(cleanQuery, platform)
+        // 3. Extract target
+        val target = when (targetType) {
+            TargetType.EMAIL -> emailTarget ?: ""
+            TargetType.PHONE_NUMBER -> phoneTarget ?: ""
+            else -> TargetExtractor.extract(cleanQuery, platform)
+        }
 
         // 4. Extract requested fields or specific intents
         val fields = extractRequestedFields(lower)
@@ -36,6 +67,7 @@ object SpyIntentParser {
             platform = platform,
             operation = operation,
             target = target,
+            targetType = targetType,
             requestedFields = fields,
             rawQuery = cleanQuery,
             maxResults = 5,
@@ -43,7 +75,7 @@ object SpyIntentParser {
         )
     }
 
-    private fun detectPlatform(lower: String): PlatformType {
+    private fun detectPlatform(lower: String): PlatformType? {
         // Direct matching via PlatformCatalog aliases
         val catalogMatch = PlatformCatalog.findByAlias(lower)
         if (catalogMatch != null) {
@@ -72,7 +104,8 @@ object SpyIntentParser {
             lower.contains("medium") -> PlatformType.MEDIUM
             lower.contains("maps") || lower.contains("google maps") || lower.contains("gmaps") -> PlatformType.GOOGLE_MAPS
             lower.contains("imdb") -> PlatformType.IMDB
-            else -> PlatformType.GENERIC_WEB
+            lower.contains("website") || lower.contains("site") || lower.contains("web ") || lower.contains("online") -> PlatformType.GENERIC_WEB
+            else -> null
         }
     }
 

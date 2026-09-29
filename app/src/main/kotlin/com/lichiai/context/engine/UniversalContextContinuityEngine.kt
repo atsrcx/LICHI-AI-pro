@@ -8,6 +8,7 @@ import com.lichiai.context.model.EntityType
 import com.lichiai.context.model.SalienceLevel
 import com.lichiai.context.model.SemanticEntity
 import com.lichiai.context.model.TopicThread
+import com.lichiai.context.model.VerifiedResultRecord
 import com.lichiai.intent.model.LichiCapability
 import com.lichiai.spy.core.PlatformType
 import com.lichiai.spy.model.PlatformProfile
@@ -221,6 +222,22 @@ class UniversalContextContinuityEngine private constructor() {
             )
             val updatedTopicHistory = (listOf(newTopicThread) + curr.topicHistory.filterNot { it.topicId == newTopicThread.topicId }).take(MAX_TOPIC_HISTORY)
 
+            val verifiedResult = VerifiedResultRecord(
+                taskId = "spy_${System.currentTimeMillis()}",
+                capability = LichiCapability.CHAT,
+                operation = "SPY_PROFILE_LOOKUP",
+                entityName = primaryEntity?.username,
+                entityType = EntityType.PROFILE,
+                extractedFacts = verifiedFacts.toMap(),
+                targetUrl = primaryEntity?.profileUrl,
+                selectedResult = primaryEntity?.displayName,
+                isVerified = true,
+                verificationState = "VERIFIED",
+                provenance = "APIFY_EXECUTOR",
+                timestamp = System.currentTimeMillis(),
+                confidence = 1.0f
+            )
+
             curr.copy(
                 activeEntityId = primaryEntityId ?: curr.activeEntityId,
                 secondaryEntityIds = profilesToIngest.mapNotNull {
@@ -239,6 +256,8 @@ class UniversalContextContinuityEngine private constructor() {
                 lastAssistantResponse = assistantResponse,
                 lastActionType = "SPY_PROFILE_LOOKUP",
                 verifiedFacts = verifiedFacts,
+                lastVerifiedResult = verifiedResult,
+                verifiedResultHistory = (listOf(verifiedResult) + curr.verifiedResultHistory).take(10),
                 recentTurns = updatedTurns,
                 updatedAt = System.currentTimeMillis(),
                 version = curr.version + 1
@@ -336,6 +355,22 @@ class UniversalContextContinuityEngine private constructor() {
             )
             val updatedTopicHistory = (listOf(newTopicThread) + curr.topicHistory.filterNot { it.title == newTopicTitle }).take(MAX_TOPIC_HISTORY)
 
+            val verifiedResult = VerifiedResultRecord(
+                taskId = "exec_${System.currentTimeMillis()}",
+                capability = capability,
+                operation = actionType ?: capability.name,
+                entityName = contactName ?: queryStr,
+                entityType = if (contactName != null) EntityType.CONTACT else if (queryStr != null) EntityType.SEARCH_RESULT else null,
+                extractedFacts = verifiedFacts.toMap(),
+                targetUrl = if (capability == LichiCapability.BROWSER) curr.currentBrowserUrl else null,
+                selectedResult = results.firstOrNull(),
+                isVerified = true,
+                verificationState = "VERIFIED",
+                provenance = "CAPABILITY_EXECUTOR",
+                timestamp = System.currentTimeMillis(),
+                confidence = 1.0f
+            )
+
             curr.copy(
                 activeEntityId = newActiveEntityId,
                 activeTopic = newTopicTitle,
@@ -349,6 +384,8 @@ class UniversalContextContinuityEngine private constructor() {
                 lastActionType = actionType ?: curr.lastActionType,
                 browserCandidates = if (results.isNotEmpty()) results else curr.browserCandidates,
                 verifiedFacts = verifiedFacts,
+                lastVerifiedResult = verifiedResult,
+                verifiedResultHistory = (listOf(verifiedResult) + curr.verifiedResultHistory).take(10),
                 recentTurns = updatedTurns,
                 updatedAt = System.currentTimeMillis(),
                 version = curr.version + 1
@@ -629,9 +666,10 @@ class UniversalContextContinuityEngine private constructor() {
 
         val profiles = context.getProfiles()
 
-        // "Nahi Instagram wala"
-        if (lower.contains("instagram")) {
+        // "Nahi Instagram wala" or "Nahi, Instagram wale profile ki baat kar raha hoon"
+        if (lower.contains("instagram") || lower.contains("insta")) {
             val target = profiles.firstOrNull { it.platform?.contains("INSTAGRAM", true) == true }
+                ?: context.entities.values.firstOrNull { it.type == EntityType.PROFILE && it.platform?.contains("INSTAGRAM", true) == true }
             if (target != null) {
                 return ContextResolutionResult(
                     resolvedEntity = target,
@@ -646,8 +684,9 @@ class UniversalContextContinuityEngine private constructor() {
         }
 
         // "Nahi YouTube wala"
-        if (lower.contains("youtube")) {
+        if (lower.contains("youtube") || lower.contains("yt")) {
             val target = profiles.firstOrNull { it.platform?.contains("YOUTUBE", true) == true }
+                ?: context.entities.values.firstOrNull { it.type == EntityType.PROFILE && it.platform?.contains("YOUTUBE", true) == true }
             if (target != null) {
                 return ContextResolutionResult(
                     resolvedEntity = target,
@@ -935,7 +974,22 @@ class UniversalContextContinuityEngine private constructor() {
             }
         }
 
-        // 2. Profile -> Browser open
+        // 2. Profile -> YouTube Channel / Browser open
+        if (lower.contains("youtube") && (lower.contains("channel") || lower.contains("kholo") || lower.contains("open") || lower.contains("jao"))) {
+            val ytEntity = context.entities.values.firstOrNull { it.type == EntityType.PROFILE && it.platform?.contains("YOUTUBE", true) == true }
+            val targetUrl = ytEntity?.url ?: "https://www.youtube.com/@${activeProfile?.name ?: ""}"
+            return ContextResolutionResult(
+                resolvedEntity = ytEntity ?: activeProfile,
+                targetText = targetUrl,
+                targetUrl = targetUrl,
+                confidence = 0.98f,
+                suggestedCapability = LichiCapability.BROWSER,
+                dialogueAct = DialogueAct.COMMAND,
+                reason = "Cross-capability transition: Active profile -> YouTube channel navigation."
+            )
+        }
+
+        // 3. Profile -> Browser open
         if ((lower.contains("browser mein kholo") || lower.contains("browser me open") || lower.contains("browser par kholo") || lower.contains("browser mein")) && activeProfile != null) {
             val targetUrl = activeProfile.website ?: activeProfile.url ?: "https://instagram.com/${activeProfile.name}"
             return ContextResolutionResult(

@@ -43,6 +43,11 @@ class RouteDispatcher(
     private val onNavigateToBrowser: () -> Unit,
     private val onNavigateToTerminal: () -> Unit = {}
 ) {
+    val browserPlatform = com.lichiai.browser.BrowserIntelligencePlatform(
+        context = context,
+        browserController = browserController,
+        webIntelligenceManager = webIntelligenceManager
+    )
 
     suspend fun dispatch(
         intent: ResolvedIntent,
@@ -51,6 +56,21 @@ class RouteDispatcher(
         when (intent) {
             is ResolvedIntent.BrowserTask -> executeBrowserTask(intent)
             is ResolvedIntent.WebSearchTask -> executeWebSearchTask(intent)
+            is ResolvedIntent.DorkSearchTask -> executeDorkSearchTask(intent)
+            is ResolvedIntent.SiteSearchTask -> executeSiteSearchTask(intent)
+            is ResolvedIntent.DeepSearchTask -> executeDeepSearchTask(intent, onProgress)
+            is ResolvedIntent.ResearchTask -> executeResearchTask(intent)
+            is ResolvedIntent.NavigateTask -> executeNavigateTask(intent)
+            is ResolvedIntent.ExtractTask -> executeExtractTask(intent)
+            is ResolvedIntent.FindOnPageTask -> executeFindOnPageTask(intent)
+            is ResolvedIntent.CompareTask -> executeCompareTask(intent)
+            is ResolvedIntent.VerifyTask -> executeVerifyTask(intent)
+            is ResolvedIntent.FormsTask -> executeFormsTask(intent)
+            is ResolvedIntent.DownloadTask -> executeDownloadTask(intent)
+            is ResolvedIntent.UploadTask -> executeUploadTask(intent)
+            is ResolvedIntent.MultiTabTask -> executeMultiTabTask(intent)
+            is ResolvedIntent.PageSummaryTask -> executePageSummaryTask(intent)
+            is ResolvedIntent.InspectTask -> executeInspectTask(intent)
             is ResolvedIntent.AndroidAgentTask -> executeAndroidAgentTask(intent, onProgress)
             is ResolvedIntent.CallTask -> executeCallTask(intent)
             is ResolvedIntent.MediaTask -> executeMediaTask(intent)
@@ -165,6 +185,356 @@ class RouteDispatcher(
         } catch (e: Exception) {
             DispatchExecutionResult.ExecutionFailed("Web search failed: ${e.message}")
         }
+    }
+
+    private suspend fun executeDorkSearchTask(task: ResolvedIntent.DorkSearchTask): DispatchExecutionResult = withContext(Dispatchers.IO) {
+        try {
+            val response = browserPlatform.executeDorkSearch(task.query)
+            val contextPrompt = webIntelligenceManager.buildWebContextPrompt(response)
+            contextBuilder.recordExecution(
+                capability = LichiCapability.DORK_SEARCH,
+                userGoal = task.query,
+                assistantResponse = task.naturalAcknowledgment,
+                searchQuery = task.query,
+                results = response.results.map { it.title },
+                actionType = "DORK_SEARCH"
+            )
+            DispatchExecutionResult.WebSearchExecuted(response, contextPrompt, task.naturalAcknowledgment)
+        } catch (e: Exception) {
+            DispatchExecutionResult.ExecutionFailed("Dork search failed: ${e.message}")
+        }
+    }
+
+    private suspend fun executeSiteSearchTask(task: ResolvedIntent.SiteSearchTask): DispatchExecutionResult = withContext(Dispatchers.IO) {
+        try {
+            val result = browserPlatform.executeSiteSearch(task.domain, task.query, task.maxPages)
+            val fakeResponse = WebSearchResponse(
+                query = task.query,
+                providerUsed = "SiteSearch (${task.domain})",
+                results = result.pages,
+                directAnswer = result.summary
+            )
+            val contextPrompt = webIntelligenceManager.buildWebContextPrompt(fakeResponse)
+            contextBuilder.recordExecution(
+                capability = LichiCapability.SITE_SEARCH,
+                userGoal = task.query,
+                assistantResponse = result.summary,
+                searchQuery = task.query,
+                results = result.pages.map { it.title },
+                actionType = "SITE_SEARCH"
+            )
+            DispatchExecutionResult.WebSearchExecuted(fakeResponse, contextPrompt, result.summary)
+        } catch (e: Exception) {
+            DispatchExecutionResult.ExecutionFailed("Site search failed: ${e.message}")
+        }
+    }
+
+    private suspend fun executeDeepSearchTask(
+        task: ResolvedIntent.DeepSearchTask,
+        onProgress: ((step: Int, total: Int, text: String) -> Unit)?
+    ): DispatchExecutionResult = withContext(Dispatchers.IO) {
+        try {
+            val report = browserPlatform.executeDeepSearch(
+                query = task.query,
+                conversationId = contextBuilder.buildContext().conversationId ?: ""
+            )
+            val fakeResponse = WebSearchResponse(
+                query = task.query,
+                providerUsed = "DeepSearch Intelligence",
+                results = report.verifiedSources,
+                directAnswer = report.synthesisText,
+                factEvidence = report.factEvidence
+            )
+            val contextPrompt = webIntelligenceManager.buildWebContextPrompt(fakeResponse)
+            contextBuilder.recordExecution(
+                capability = LichiCapability.DEEP_SEARCH,
+                userGoal = task.query,
+                assistantResponse = report.synthesisText,
+                searchQuery = task.query,
+                results = report.verifiedSources.map { it.title },
+                actionType = "DEEP_SEARCH"
+            )
+            DispatchExecutionResult.WebSearchExecuted(fakeResponse, contextPrompt, report.synthesisText)
+        } catch (e: Exception) {
+            DispatchExecutionResult.ExecutionFailed("DeepSearch failed: ${e.message}")
+        }
+    }
+
+    private suspend fun executeResearchTask(task: ResolvedIntent.ResearchTask): DispatchExecutionResult = withContext(Dispatchers.IO) {
+        try {
+            val report = browserPlatform.executeResearch(
+                topic = task.topic,
+                queries = task.queries,
+                conversationId = contextBuilder.buildContext().conversationId ?: ""
+            )
+            val fakeResponse = WebSearchResponse(
+                query = task.topic,
+                providerUsed = "Autonomous Research",
+                results = report.sources,
+                directAnswer = report.finalAnswer
+            )
+            val contextPrompt = webIntelligenceManager.buildWebContextPrompt(fakeResponse)
+            contextBuilder.recordExecution(
+                capability = LichiCapability.RESEARCH,
+                userGoal = task.topic,
+                assistantResponse = report.finalAnswer,
+                searchQuery = task.topic,
+                results = report.sources.map { it.title },
+                actionType = "RESEARCH"
+            )
+            DispatchExecutionResult.WebSearchExecuted(fakeResponse, contextPrompt, report.finalAnswer)
+        } catch (e: Exception) {
+            DispatchExecutionResult.ExecutionFailed("Research failed: ${e.message}")
+        }
+    }
+
+    private suspend fun executeNavigateTask(task: ResolvedIntent.NavigateTask): DispatchExecutionResult = withContext(Dispatchers.Main) {
+        onNavigateToBrowser()
+        val result = browserPlatform.executeNavigate(task.url)
+        contextBuilder.recordExecution(
+            capability = LichiCapability.NAVIGATE,
+            userGoal = task.url,
+            assistantResponse = result.message,
+            actionType = "NAVIGATE"
+        )
+        DispatchExecutionResult.BrowserExecuted(result.message)
+    }
+
+    private suspend fun executeExtractTask(task: ResolvedIntent.ExtractTask): DispatchExecutionResult = withContext(Dispatchers.Main) {
+        onNavigateToBrowser()
+        val extracted = browserPlatform.executeExtract()
+        val summary = "Extracted from ${extracted.title}: ${extracted.headings.size} headings, ${extracted.tables.size} tables, ${extracted.prices.size} price points."
+        contextBuilder.recordExecution(
+            capability = LichiCapability.EXTRACT,
+            userGoal = "Extract content",
+            assistantResponse = summary,
+            actionType = "EXTRACT"
+        )
+        DispatchExecutionResult.BrowserExecuted(summary)
+    }
+
+    private suspend fun executeFindOnPageTask(task: ResolvedIntent.FindOnPageTask): DispatchExecutionResult = withContext(Dispatchers.Main) {
+        onNavigateToBrowser()
+        val result = browserPlatform.executeFindOnPage(task.keyword)
+        contextBuilder.recordExecution(
+            capability = LichiCapability.FIND_ON_PAGE,
+            userGoal = task.keyword,
+            assistantResponse = result.message,
+            actionType = "FIND_ON_PAGE"
+        )
+        DispatchExecutionResult.BrowserExecuted(result.message)
+    }
+
+    private suspend fun executeCompareTask(task: ResolvedIntent.CompareTask): DispatchExecutionResult = withContext(Dispatchers.IO) {
+        try {
+            val report = browserPlatform.executeCompare(task.entities, task.criteria)
+            val fakeResponse = WebSearchResponse(
+                query = task.entities.joinToString(" vs "),
+                providerUsed = "Comparison Intelligence",
+                results = report.comparedEntities.map {
+                    com.lichiai.web.model.WebResult(
+                        title = it.entityName,
+                        url = it.sourceUrl,
+                        domain = it.sourceDomain,
+                        snippet = "${it.price} | ${it.features.joinToString()}"
+                    )
+                },
+                directAnswer = report.summaryDifferences
+            )
+            val contextPrompt = webIntelligenceManager.buildWebContextPrompt(fakeResponse)
+            contextBuilder.recordExecution(
+                capability = LichiCapability.COMPARE,
+                userGoal = task.entities.joinToString(" vs "),
+                assistantResponse = report.summaryDifferences,
+                actionType = "COMPARE"
+            )
+            DispatchExecutionResult.WebSearchExecuted(fakeResponse, contextPrompt, report.summaryDifferences)
+        } catch (e: Exception) {
+            DispatchExecutionResult.ExecutionFailed("Comparison failed: ${e.message}")
+        }
+    }
+
+    private suspend fun executeVerifyTask(task: ResolvedIntent.VerifyTask): DispatchExecutionResult = withContext(Dispatchers.IO) {
+        try {
+            val response = browserPlatform.executeVerify(task.claim, task.domain)
+            val contextPrompt = webIntelligenceManager.buildWebContextPrompt(response)
+            contextBuilder.recordExecution(
+                capability = LichiCapability.VERIFY,
+                userGoal = task.claim,
+                assistantResponse = task.naturalAcknowledgment,
+                searchQuery = task.claim,
+                results = response.results.map { it.title },
+                actionType = "VERIFY"
+            )
+            DispatchExecutionResult.WebSearchExecuted(response, contextPrompt, task.naturalAcknowledgment)
+        } catch (e: Exception) {
+            DispatchExecutionResult.ExecutionFailed("Verification failed: ${e.message}")
+        }
+    }
+
+    private suspend fun executeFormsTask(task: ResolvedIntent.FormsTask): DispatchExecutionResult = withContext(Dispatchers.Main) {
+        onNavigateToBrowser()
+        val results = browserPlatform.executeForms(task.fieldValues, task.submit)
+        val successCount = results.count { it.isSuccess }
+        val msg = "Filled ${task.fieldValues.size} form fields ($successCount successful)${if (task.submit) " and submitted" else ""}."
+        contextBuilder.recordExecution(
+            capability = LichiCapability.FORMS,
+            userGoal = "Fill form",
+            assistantResponse = msg,
+            actionType = "FORMS"
+        )
+        DispatchExecutionResult.BrowserExecuted(msg)
+    }
+
+    private suspend fun executeDownloadTask(task: ResolvedIntent.DownloadTask): DispatchExecutionResult = withContext(Dispatchers.Main) {
+        val result = browserPlatform.executeDownload(task.url)
+        contextBuilder.recordExecution(
+            capability = LichiCapability.DOWNLOAD,
+            userGoal = task.url,
+            assistantResponse = result.message,
+            actionType = "DOWNLOAD"
+        )
+        DispatchExecutionResult.BrowserExecuted(result.message)
+    }
+
+    private suspend fun executeUploadTask(task: ResolvedIntent.UploadTask): DispatchExecutionResult = withContext(Dispatchers.Main) {
+        val result = browserPlatform.executeUpload(task.targetIdOrIndex, task.filePath)
+        contextBuilder.recordExecution(
+            capability = LichiCapability.UPLOAD,
+            userGoal = task.filePath,
+            assistantResponse = result.message,
+            actionType = "UPLOAD"
+        )
+        DispatchExecutionResult.BrowserExecuted(result.message)
+    }
+
+    private suspend fun executeMultiTabTask(task: ResolvedIntent.MultiTabTask): DispatchExecutionResult = withContext(Dispatchers.Main) {
+        onNavigateToBrowser()
+        val result = browserPlatform.executeMultiTab(task.action, task.tabId, task.url)
+        contextBuilder.recordExecution(
+            capability = LichiCapability.MULTI_TAB,
+            userGoal = task.action,
+            assistantResponse = result.message,
+            actionType = "MULTI_TAB"
+        )
+        DispatchExecutionResult.BrowserExecuted(result.message)
+    }
+
+    private suspend fun executePageSummaryTask(task: ResolvedIntent.PageSummaryTask): DispatchExecutionResult = withContext(Dispatchers.Main) {
+        onNavigateToBrowser()
+        val summary = browserPlatform.executePageSummary()
+        contextBuilder.recordExecution(
+            capability = LichiCapability.PAGE_SUMMARY,
+            userGoal = "Page summary",
+            assistantResponse = summary,
+            actionType = "PAGE_SUMMARY"
+        )
+        DispatchExecutionResult.BrowserExecuted(summary)
+    }
+
+    private suspend fun executeInspectTask(task: ResolvedIntent.InspectTask): DispatchExecutionResult = withContext(Dispatchers.Main) {
+        if (task.showUi) {
+            onNavigateToBrowser()
+        }
+        val queryLower = task.query.lowercase()
+        val resultMessage = when {
+            queryLower.contains("link") || queryLower.contains("url") -> {
+                val links = browserPlatform.browserController.discoverLinks()
+                val byCat = links.groupBy { it.category }
+                buildString {
+                    append("Discovered ${links.size} total links on this page:\n")
+                    byCat.forEach { (cat, list) ->
+                        append("\n• Category: $cat (${list.size})\n")
+                        list.take(6).forEach { l ->
+                            append("  - \"${l.text.ifBlank { l.url }}\" -> ${l.url}\n")
+                        }
+                    }
+                }
+            }
+            queryLower.contains("endpoint") || queryLower.contains("api") -> {
+                val eps = browserPlatform.executeEndpointDiscovery()
+                if (eps.isEmpty()) "Is website par abhi koi active asynchronous API endpoint trigger nahi hua hai."
+                else buildString {
+                    append("Observed ${eps.size} API endpoints:\n")
+                    eps.forEachIndexed { i, ep ->
+                        append("${i + 1}. [${ep.method}] ${ep.path} (${ep.domain})\n")
+                        append("   Category: ${ep.category}, Status: ${ep.responseStatusCode}, Content-Type: ${ep.responseContentType}\n")
+                        if (ep.parameters.isNotEmpty()) {
+                            append("   Parameters: ${ep.parameters.joinToString(", ") { "${it.name}=${it.sampleValue}" }}\n")
+                        }
+                    }
+                }
+            }
+            queryLower.contains("download") -> {
+                val dls = browserPlatform.executeDownloadDiscovery()
+                if (dls.isEmpty()) "Is page par koi direct download link identify nahi hua."
+                else buildString {
+                    append("Discovered ${dls.size} direct download links:\n")
+                    dls.forEachIndexed { i, dl ->
+                        append("${i + 1}. ${dl.filename} (.${dl.extension})\n   URL: ${dl.url}\n   Source: ${dl.detectedVia}\n")
+                    }
+                }
+            }
+            queryLower.contains("resource") || queryLower.contains("script") || queryLower.contains("domain") -> {
+                val res = browserPlatform.executeResourceDiscovery()
+                val externalDomains = res.filter { it.isThirdParty }.map { it.domain }.distinct()
+                buildString {
+                    append("Discovered ${res.size} resources across page:\n")
+                    append("• Scripts: ${res.count { it.type == "Script" }}\n")
+                    append("• Stylesheets: ${res.count { it.type == "Stylesheet" }}\n")
+                    append("• Images: ${res.count { it.type == "Image" }}\n")
+                    if (externalDomains.isNotEmpty()) {
+                        append("\nExternal Connected Domains (${externalDomains.size}):\n")
+                        externalDomains.forEach { append("• $it\n") }
+                    }
+                }
+            }
+            queryLower.contains("form") -> {
+                val mode = com.lichiai.browser.inspection.model.InspectionMode.PAGE_INSPECTION
+                val report = browserPlatform.executeInspectPage(mode)
+                if (report.forms.isEmpty()) "Is page par koi HTML form detect nahi hua."
+                else buildString {
+                    append("Detected ${report.forms.size} forms on this page:\n")
+                    report.forms.forEachIndexed { i, f ->
+                        append("${i + 1}. ${f.formName} [${f.method}] -> Action: ${f.action}\n")
+                        append("   Fields (${f.fields.size}): ${f.fields.joinToString(", ") { "${it.name} (${it.type})" }}\n")
+                    }
+                }
+            }
+            queryLower.contains("network") || queryLower.contains("request") -> {
+                val analysis = browserPlatform.executeNetworkAnalysis()
+                buildString {
+                    append("=== NETWORK REQUESTS ANALYSIS ===\n")
+                    append("Total Requests: ${analysis.totalRequests}\n")
+                    append("Failed Requests: ${analysis.timeline.totalFailed}\n")
+                    append("Slow Requests (>1s): ${analysis.timeline.totalSlowRequests}\n")
+                    append("Average Latency: ${analysis.timeline.averageLatencyMs}ms\n\n")
+                    append("Top Domains Connected:\n")
+                    analysis.topDomains.take(6).forEach { (d, c) ->
+                        append("• $d: $c requests\n")
+                    }
+                }
+            }
+            else -> {
+                val mode = com.lichiai.browser.inspection.model.InspectionMode.fromString(task.mode)
+                val report = browserPlatform.executeInspectPage(mode)
+                buildString {
+                    append(report.technicalStructureExplanation)
+                    append("\n\n**Findings:**\n")
+                    report.findings.forEach { f ->
+                        append("• [${f.category}] ${f.title}: ${f.description}\n")
+                    }
+                }
+            }
+        }
+
+        contextBuilder.recordExecution(
+            capability = LichiCapability.INSPECT_PAGE,
+            userGoal = task.query.ifBlank { "Deep inspect website" },
+            assistantResponse = resultMessage,
+            actionType = "INSPECT"
+        )
+        DispatchExecutionResult.BrowserExecuted(resultMessage)
     }
 
     private suspend fun executeAndroidAgentTask(

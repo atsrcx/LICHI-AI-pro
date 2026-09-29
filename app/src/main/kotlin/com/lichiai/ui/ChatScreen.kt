@@ -95,7 +95,6 @@ import com.lichiai.data.ProviderConfig
 import com.lichiai.ui.spy.PlatformProfileCard
 import com.lichiai.ui.spy.ProfilePreviewCard
 import com.lichiai.ui.spy.SpyProfileSerializer
-import com.lichiai.ui.activity.AssistantActivityIndicator
 import com.lichiai.ui.activity.AssistantActivityState
 import com.lichiai.ui.activity.toAssistantActivity
 import com.lichiai.web.model.WebActivityState
@@ -675,8 +674,9 @@ private fun LichiAssistantRow(
             message.taskActivity
         }
         if (act != null) {
-            AssistantActivityIndicator(
+            com.lichiai.ui.activity.TaskActivityChip(
                 activity = act,
+                messageId = message.id,
                 modifier = Modifier.padding(bottom = 8.dp)
             )
         }

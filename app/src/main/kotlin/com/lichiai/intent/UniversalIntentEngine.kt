@@ -161,8 +161,23 @@ class UniversalIntentEngine(
         isCancellation: Boolean = false
     ): IntentUnderstanding {
         val intentType = when (intent) {
-            is ResolvedIntent.BrowserTask -> IntentType.VISIBLE_BROWSER_TASK
-            is ResolvedIntent.WebSearchTask -> IntentType.WEB_SEARCH
+            is ResolvedIntent.BrowserTask,
+            is ResolvedIntent.NavigateTask,
+            is ResolvedIntent.ExtractTask,
+            is ResolvedIntent.FindOnPageTask,
+            is ResolvedIntent.FormsTask,
+            is ResolvedIntent.DownloadTask,
+            is ResolvedIntent.UploadTask,
+            is ResolvedIntent.MultiTabTask,
+            is ResolvedIntent.PageSummaryTask,
+            is ResolvedIntent.InspectTask -> IntentType.VISIBLE_BROWSER_TASK
+            is ResolvedIntent.WebSearchTask,
+            is ResolvedIntent.DorkSearchTask,
+            is ResolvedIntent.SiteSearchTask,
+            is ResolvedIntent.DeepSearchTask,
+            is ResolvedIntent.ResearchTask,
+            is ResolvedIntent.CompareTask,
+            is ResolvedIntent.VerifyTask -> IntentType.WEB_SEARCH
             is ResolvedIntent.AndroidAgentTask -> IntentType.ANDROID_ACTION
             is ResolvedIntent.CallTask -> IntentType.CALL_ACTION
             is ResolvedIntent.MediaTask -> IntentType.MEDIA_ACTION

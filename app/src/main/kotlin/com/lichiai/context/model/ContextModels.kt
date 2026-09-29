@@ -72,6 +72,29 @@ enum class SalienceLevel {
 }
 
 /**
+ * Canonical verified result record preserving authoritative executor outputs
+ * across tasks and steps for multi-step continuity and anti-hallucination.
+ */
+@Serializable
+data class VerifiedResultRecord(
+    val taskId: String = "",
+    val stepId: String? = null,
+    val parentTaskId: String? = null,
+    val capability: LichiCapability = LichiCapability.CHAT,
+    val operation: String = "",
+    val entityName: String? = null,
+    val entityType: EntityType? = null,
+    val extractedFacts: Map<String, String> = emptyMap(),
+    val targetUrl: String? = null,
+    val selectedResult: String? = null,
+    val isVerified: Boolean = true,
+    val verificationState: String = "VERIFIED", // "VERIFIED", "PARTIAL", "UNKNOWN", "FAILED", "BLOCKED"
+    val provenance: String = "EXECUTOR",
+    val timestamp: Long = System.currentTimeMillis(),
+    val confidence: Float = 1.0f
+)
+
+/**
  * A discrete semantic entity within the conversation's Entity Graph.
  */
 @Serializable
@@ -191,6 +214,8 @@ data class ConversationContext(
     val recentDialogueActs: List<DialogueAct> = emptyList(),
     val recentCorrections: List<String> = emptyList(),
     val verifiedFacts: Map<String, String> = emptyMap(),
+    val lastVerifiedResult: VerifiedResultRecord? = null,
+    val verifiedResultHistory: List<VerifiedResultRecord> = emptyList(),
     val recentTurns: List<Pair<String, String>> = emptyList(),
     val contextConfidence: Float = 1.0f,
     val updatedAt: Long = System.currentTimeMillis(),

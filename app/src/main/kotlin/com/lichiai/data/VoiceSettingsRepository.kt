@@ -17,6 +17,11 @@ import kotlinx.serialization.json.Json
 
 private val Context.voiceDataStore by preferencesDataStore(name = "voice_settings")
 
+enum class VoiceEngine {
+    REST,
+    GEMINI_LIVE
+}
+
 enum class SttMode {
     SYSTEM_DEFAULT,
     ON_DEVICE,
@@ -28,7 +33,19 @@ enum class TtsMode {
     SPECIFIC_ENGINE
 }
 
+data class GeminiLiveModelInfo(
+    val id: String,
+    val displayName: String,
+    val description: String,
+    val isLegacy: Boolean = false,
+    val requiresThinkingConfig: Boolean = false
+)
+
 data class VoiceSettings(
+    val voiceEngine: VoiceEngine = VoiceEngine.REST,
+    val geminiLiveModel: String = "gemini-2.5-flash-native-audio-preview-12-2025",
+    val geminiLiveVoice: String = "Puck",
+
     val sttMode: SttMode = SttMode.SYSTEM_DEFAULT,
     val sttComponent: String = "", // e.g. "package/serviceClass"
     val sttLanguage: String = "default", // e.g. "default", "en-US", "hi-IN"
@@ -49,6 +66,10 @@ data class VoiceSettings(
 class VoiceSettingsRepository(private val context: Context) {
 
     private object Keys {
+        val VOICE_ENGINE = stringPreferencesKey("voice_engine")
+        val GEMINI_LIVE_MODEL = stringPreferencesKey("gemini_live_model")
+        val GEMINI_LIVE_VOICE = stringPreferencesKey("gemini_live_voice")
+
         val STT_MODE = stringPreferencesKey("stt_mode")
         val STT_COMPONENT = stringPreferencesKey("stt_component")
         val STT_LANGUAGE = stringPreferencesKey("stt_language")
@@ -82,8 +103,33 @@ class VoiceSettingsRepository(private val context: Context) {
         }
     }
 
+    companion object {
+        val SUPPORTED_LIVE_MODELS = listOf(
+            GeminiLiveModelInfo(
+                id = "gemini-2.5-flash-native-audio-preview-12-2025",
+                displayName = "Gemini 2.5 Flash Native Audio",
+                description = "Ultra-low-latency native audio model (Recommended)"
+            ),
+            GeminiLiveModelInfo(
+                id = "gemini-3.8-live",
+                displayName = "Gemini 3.8 Live",
+                description = "Bidirectional live audio model"
+            ),
+            GeminiLiveModelInfo(
+                id = "gemini-3.8-live-extended-thinking",
+                displayName = "Gemini 3.8 Live Extended Thinking",
+                description = "Live audio with high-depth analytical reasoning",
+                requiresThinkingConfig = true
+            )
+        )
+    }
+
     val settings: Flow<VoiceSettings> = context.voiceDataStore.data.map { prefs ->
         VoiceSettings(
+            voiceEngine = prefs[Keys.VOICE_ENGINE]?.let { runCatching { VoiceEngine.valueOf(it) }.getOrNull() } ?: VoiceEngine.REST,
+            geminiLiveModel = prefs[Keys.GEMINI_LIVE_MODEL] ?: "gemini-2.5-flash-native-audio-preview-12-2025",
+            geminiLiveVoice = prefs[Keys.GEMINI_LIVE_VOICE] ?: "Puck",
+
             sttMode = prefs[Keys.STT_MODE]?.let { runCatching { SttMode.valueOf(it) }.getOrNull() } ?: SttMode.SYSTEM_DEFAULT,
             sttComponent = prefs[Keys.STT_COMPONENT] ?: "",
             sttLanguage = prefs[Keys.STT_LANGUAGE] ?: "default",
@@ -100,6 +146,24 @@ class VoiceSettingsRepository(private val context: Context) {
             bargeInEnabled = prefs[Keys.BARGE_IN_ENABLED] ?: true,
             safeEchoProtection = prefs[Keys.SAFE_ECHO_PROTECTION] ?: true
         )
+    }
+
+    suspend fun updateVoiceEngine(engine: VoiceEngine) {
+        context.voiceDataStore.edit { prefs ->
+            prefs[Keys.VOICE_ENGINE] = engine.name
+        }
+    }
+
+    suspend fun updateGeminiLiveModel(model: String) {
+        context.voiceDataStore.edit { prefs ->
+            prefs[Keys.GEMINI_LIVE_MODEL] = model
+        }
+    }
+
+    suspend fun updateGeminiLiveVoice(voice: String) {
+        context.voiceDataStore.edit { prefs ->
+            prefs[Keys.GEMINI_LIVE_VOICE] = voice
+        }
     }
 
     suspend fun updateSttMode(mode: SttMode, component: String = "") {

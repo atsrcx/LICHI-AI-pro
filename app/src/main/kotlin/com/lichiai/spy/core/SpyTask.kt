@@ -27,7 +27,8 @@ enum class PlatformType(val id: String, val displayName: String) {
     MEDIUM("medium", "Medium"),
     GOOGLE_MAPS("google_maps", "Google Maps"),
     IMDB("imdb", "IMDb"),
-    GENERIC_WEB("web", "Universal Platform")
+    GENERIC_WEB("web", "Universal Platform"),
+    UNKNOWN("unknown", "Unknown")
 }
 
 @Serializable
@@ -43,13 +44,25 @@ enum class SpyOperation(val id: String, val description: String) {
     PROFILE_ACTIVITY("profile_activity", "Fetch public activity and highlights"),
     PROFILE_LINKS("profile_links", "Fetch public websites and connected links"),
     PROFILE_PUBLIC_CONTACTS("profile_contacts", "Fetch publicly published business contact methods"),
+    PUBLIC_CONTACT_LOOKUP("contact_lookup", "Look up publicly exposed business contact"),
     PUBLIC_EMAIL_LOOKUP("email_lookup", "Look up publicly exposed business contact email"),
     PUBLIC_PHONE_LOOKUP("phone_lookup", "Look up publicly exposed business contact phone number"),
+    PROFILE_PREVIEW("profile_preview", "Fetch and render visual preview of profile"),
     CONTENT_SEARCH("content_search", "Search public topics, posts, and articles"),
     CONTENT_LOOKUP("content_lookup", "Fetch specific post or thread details"),
     CHANNEL_DATA("channel_data", "Fetch channel details, statistics, and videos"),
     CONTENT_METRICS("content_metrics", "Fetch public likes, views, followers, or metrics"),
     COMMUNITY_POSTS("community_posts", "Fetch recent community or subreddit posts")
+}
+
+@Serializable
+enum class TargetType {
+    HANDLE_OR_USERNAME,
+    PHONE_NUMBER,
+    EMAIL,
+    URL,
+    SUBREDDIT,
+    SEARCH_QUERY
 }
 
 @Serializable
@@ -60,6 +73,7 @@ data class SpyTask(
     val platform: PlatformType = PlatformType.GENERIC_WEB,
     val operation: SpyOperation = SpyOperation.PROFILE_LOOKUP,
     val target: String = "",
+    val targetType: TargetType = TargetType.HANDLE_OR_USERNAME,
     val requestedFields: List<String> = emptyList(),
     val rawQuery: String = "",
     val maxResults: Int = 5,

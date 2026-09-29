@@ -90,6 +90,7 @@ fun VoiceConversationScreen(
     val sessionState by orchestrator.sessionState.collectAsState()
     val agentStatus by orchestrator.agentLiveStatus.collectAsState()
     val webActivityState by orchestrator.webActivityState.collectAsState()
+    val voiceSettings by orchestrator.voiceSettingsRepository.settings.collectAsState(initial = com.lichiai.data.VoiceSettings())
 
     var hasMicPermission by remember {
         mutableStateOf(
@@ -104,9 +105,6 @@ fun VoiceConversationScreen(
         contract = ActivityResultContracts.RequestPermission()
     ) { isGranted ->
         hasMicPermission = isGranted
-        if (isGranted) {
-            orchestrator.startSession(activeProvider, activeAssistant)
-        }
     }
 
     LaunchedEffect(hasMicPermission) {
@@ -178,8 +176,12 @@ fun VoiceConversationScreen(
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     // Top-Left: Model & Assistant Pill
-                    val modelDisplay = activeSettings.activeModel.ifBlank {
-                        activeProvider?.models?.firstOrNull() ?: "Auto"
+                    val modelDisplay = if (voiceSettings.voiceEngine == com.lichiai.data.VoiceEngine.GEMINI_LIVE) {
+                        "Gemini Live (${voiceSettings.geminiLiveVoice})"
+                    } else {
+                        activeSettings.activeModel.ifBlank {
+                            activeProvider?.models?.firstOrNull() ?: "Auto"
+                        }
                     }
                     val brandName = activeAssistant?.name ?: "LICHI-AI"
 
@@ -344,10 +346,10 @@ fun VoiceConversationScreen(
                             sessionState.isMicMuted -> "Microphone Muted"
                             sessionState.state == VoiceState.LISTENING -> "Listening..."
                             sessionState.state == VoiceState.TRANSCRIBING -> "Listening to you..."
-                            sessionState.state == VoiceState.THINKING -> "Thinking..."
+                            sessionState.state == VoiceState.THINKING -> sessionState.activeAssistantText.ifBlank { "Connecting..." }
                             sessionState.state == VoiceState.SPEAKING -> "Speaking (Tap orb to interrupt)"
                             sessionState.state == VoiceState.INTERRUPTED -> "Interrupted"
-                            sessionState.state == VoiceState.ERROR -> sessionState.errorMessage ?: "Speech error"
+                            sessionState.state == VoiceState.ERROR -> sessionState.errorMessage ?: "Connection error"
                             sessionState.state == VoiceState.PAUSED -> "Paused"
                             else -> "Connecting..."
                         }
@@ -367,6 +369,16 @@ fun VoiceConversationScreen(
                             fontWeight = FontWeight.SemiBold,
                             textAlign = TextAlign.Center
                         )
+
+                        if (sessionState.state == VoiceState.ERROR) {
+                            Spacer(Modifier.height(8.dp))
+                            Button(
+                                onClick = { orchestrator.startSession(activeProvider, activeAssistant) },
+                                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.error)
+                            ) {
+                                Text("Retry Connection", color = MaterialTheme.colorScheme.onError)
+                            }
+                        }
                     }
                 }
 

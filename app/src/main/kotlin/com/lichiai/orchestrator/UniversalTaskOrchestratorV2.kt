@@ -303,21 +303,6 @@ class UniversalTaskOrchestratorV2(
         // 7. Handle non-execution modes
         when (v2Decision.mode) {
             DecisionMode.CONVERSE -> {
-                if (v2Decision.directResponseText.isNotBlank()) {
-                    contextBuilder.recordExecution(
-                        capability = LichiCapability.CHAT,
-                        userGoal = trimmed,
-                        assistantResponse = v2Decision.directResponseText,
-                        conversationId = convId
-                    )
-                    return@withContext OrchestrationResult(
-                        finalSpeech = v2Decision.directResponseText,
-                        isSuccess = true,
-                        primaryCapability = LichiCapability.CHAT,
-                        isDirectChat = false,
-                        directChatPrompt = ""
-                    )
-                }
                 return@withContext OrchestrationResult(
                     finalSpeech = "",
                     isSuccess = true,
@@ -802,6 +787,115 @@ class UniversalTaskOrchestratorV2(
                     user = step.arguments["user"],
                     port = step.arguments["port"]?.toIntOrNull() ?: 22,
                     rawPrompt = userGoal,
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.DORK_SEARCH -> {
+                ResolvedIntent.DorkSearchTask(
+                    query = step.arguments["query"] ?: userGoal,
+                    site = step.arguments["site"],
+                    fileType = step.arguments["fileType"],
+                    exactPhrase = step.arguments["exactPhrase"],
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.SITE_SEARCH -> {
+                ResolvedIntent.SiteSearchTask(
+                    domain = step.arguments["domain"] ?: "developer.android.com",
+                    query = step.arguments["query"] ?: userGoal,
+                    maxPages = step.arguments["maxPages"]?.toIntOrNull() ?: 3,
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.DEEP_SEARCH -> {
+                ResolvedIntent.DeepSearchTask(
+                    query = step.arguments["query"] ?: userGoal,
+                    maxBudgetQueries = step.arguments["maxBudget"]?.toIntOrNull() ?: 3,
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.RESEARCH -> {
+                ResolvedIntent.ResearchTask(
+                    topic = step.arguments["topic"] ?: userGoal,
+                    queries = step.arguments["queries"]?.split(";")?.map { it.trim() } ?: emptyList(),
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.NAVIGATE -> {
+                ResolvedIntent.NavigateTask(
+                    url = step.arguments["url"] ?: "https://www.google.com",
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.EXTRACT -> {
+                ResolvedIntent.ExtractTask(
+                    target = step.arguments["target"] ?: "ALL",
+                    url = step.arguments["url"],
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.FIND_ON_PAGE -> {
+                ResolvedIntent.FindOnPageTask(
+                    keyword = step.arguments["keyword"] ?: userGoal,
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.COMPARE -> {
+                val entitiesList = step.arguments["entities"]?.split(";")?.map { it.trim() }
+                    ?: listOf(userGoal)
+                ResolvedIntent.CompareTask(
+                    entities = entitiesList,
+                    criteria = step.arguments["criteria"]?.split(";")?.map { it.trim() } ?: emptyList(),
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.VERIFY -> {
+                ResolvedIntent.VerifyTask(
+                    claim = step.arguments["claim"] ?: userGoal,
+                    domain = step.arguments["domain"],
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.FORMS -> {
+                val fields = step.arguments.filterKeys { it != "submit" }
+                ResolvedIntent.FormsTask(
+                    fieldValues = fields,
+                    submit = step.arguments["submit"]?.toBooleanStrictOrNull() ?: true,
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.DOWNLOAD -> {
+                ResolvedIntent.DownloadTask(
+                    url = step.arguments["url"] ?: "about:blank",
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.UPLOAD -> {
+                ResolvedIntent.UploadTask(
+                    targetIdOrIndex = step.arguments["targetId"] ?: "1",
+                    filePath = step.arguments["filePath"] ?: "",
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.MULTI_TAB -> {
+                ResolvedIntent.MultiTabTask(
+                    action = step.arguments["action"] ?: "LIST",
+                    tabId = step.arguments["tabId"],
+                    url = step.arguments["url"],
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.PAGE_SUMMARY -> {
+                ResolvedIntent.PageSummaryTask(
+                    focus = step.arguments["focus"],
+                    naturalAcknowledgment = step.expectedOutcome
+                )
+            }
+            LichiCapability.INSPECT_PAGE -> {
+                ResolvedIntent.InspectTask(
+                    mode = step.arguments["mode"] ?: "FULL_INSPECTION",
+                    query = step.arguments["query"] ?: userGoal,
+                    showUi = step.arguments["showUi"]?.toBooleanStrictOrNull() ?: false,
                     naturalAcknowledgment = step.expectedOutcome
                 )
             }

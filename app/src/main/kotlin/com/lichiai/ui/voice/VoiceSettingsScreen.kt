@@ -59,6 +59,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -78,11 +79,15 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import com.lichiai.data.ProviderStore
 import com.lichiai.data.SttMode
 import com.lichiai.data.TtsMode
+import com.lichiai.data.VoiceEngine
 import com.lichiai.data.VoiceSettings
 import com.lichiai.data.VoiceSettingsRepository
 import com.lichiai.voice.VoiceConversationOrchestrator
+import com.lichiai.voice.conversation.VoiceState
+import com.lichiai.voice.live.GeminiKeyResolver
 import com.lichiai.voice.stt.SttProviderDiscovery
 import com.lichiai.voice.stt.SttProviderInfo
 import com.lichiai.voice.tts.TtsEngineDiscovery
@@ -117,6 +122,12 @@ fun VoiceSettingsScreen(
     val wakeEngineState by (wakeWordManager?.engineState ?: kotlinx.coroutines.flow.MutableStateFlow(WakeWordEngineState.READY)).collectAsState()
     val modelState by (wakeWordManager?.modelState ?: VoskModelManager.modelState).collectAsState()
     val arbitrationRecord by MicrophoneArbitrator.ownershipRecord.collectAsState()
+    val providerStore = remember { ProviderStore(context) }
+    val providers by providerStore.providersFlow.collectAsState(initial = emptyList())
+    val detectedGeminiProvider = remember(providers) {
+        providers.firstOrNull { GeminiKeyResolver.isGeminiProvider(it) && it.apiKey.isNotBlank() }
+            ?: providers.firstOrNull { GeminiKeyResolver.isGeminiProvider(it) }
+    }
 
     var hasMicPermission by remember {
         mutableStateOf(
@@ -182,6 +193,308 @@ fun VoiceSettingsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item { Spacer(Modifier.height(4.dp)) }
+
+            // Section: Voice Mode Engine
+            item {
+                SectionHeader(title = "Voice Mode Engine", icon = Icons.Default.GraphicEq)
+                Card(
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
+                    shape = RoundedCornerShape(16.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            "Conversational Engine",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold
+                        )
+                        Text(
+                            "Choose between standard REST pipeline (STT → LLM → TTS) and ultra-low-latency Gemini Live WebSocket audio.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(Modifier.height(12.dp))
+
+                        // Option 1: Standard REST Voice
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    scope.launch {
+                                        voiceSettingsRepository.updateVoiceEngine(VoiceEngine.REST)
+                                    }
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = voiceSettings.voiceEngine == VoiceEngine.REST,
+                                onClick = {
+                                    scope.launch {
+                                        voiceSettingsRepository.updateVoiceEngine(VoiceEngine.REST)
+                                    }
+                                }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    "Standard REST Voice",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (voiceSettings.voiceEngine == VoiceEngine.REST) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                                Text(
+                                    "Uses modular STT → LLM Client REST API → Local TTS. Compatible with OpenAI, DeepSeek, Groq, Ollama, etc.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // Option 2: Gemini Live Voice
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    scope.launch {
+                                        voiceSettingsRepository.updateVoiceEngine(VoiceEngine.GEMINI_LIVE)
+                                    }
+                                }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            RadioButton(
+                                selected = voiceSettings.voiceEngine == VoiceEngine.GEMINI_LIVE,
+                                onClick = {
+                                    scope.launch {
+                                        voiceSettingsRepository.updateVoiceEngine(VoiceEngine.GEMINI_LIVE)
+                                    }
+                                }
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            Column {
+                                Text(
+                                    "Gemini Live Voice",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    fontWeight = if (voiceSettings.voiceEngine == VoiceEngine.GEMINI_LIVE) FontWeight.SemiBold else FontWeight.Normal
+                                )
+                                Text(
+                                    "Bidirectional real-time streaming audio over WebSockets with sub-second latency and native barge-in.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+
+                        // Sub-options when Gemini Live is selected
+                        AnimatedVisibility(visible = voiceSettings.voiceEngine == VoiceEngine.GEMINI_LIVE) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(top = 10.dp)
+                                    .background(
+                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.7f),
+                                        RoundedCornerShape(12.dp)
+                                    )
+                                    .padding(14.dp)
+                            ) {
+                                Text(
+                                    "Gemini Live Settings",
+                                    style = MaterialTheme.typography.titleSmall,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                                Spacer(Modifier.height(8.dp))
+
+                                // Existing Provider / API Key Detection
+                                if (detectedGeminiProvider != null && detectedGeminiProvider.apiKey.isNotBlank()) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(
+                                                MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.4f),
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            "API key detected from provider '${detectedGeminiProvider.name}'",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurface
+                                        )
+                                    }
+                                } else {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(
+                                                MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.4f),
+                                                RoundedCornerShape(8.dp)
+                                            )
+                                            .padding(horizontal = 10.dp, vertical = 6.dp)
+                                    ) {
+                                        Icon(
+                                            Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(
+                                            "No Gemini provider configured with an API key. Please configure one in Settings → Providers.",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer
+                                        )
+                                    }
+                                }
+
+                                Spacer(Modifier.height(12.dp))
+
+                                // Live Connection Status
+                                LiveConnectionStatusIndicator(orchestrator = orchestrator)
+
+                                Spacer(Modifier.height(12.dp))
+
+                                // Live Model Selection
+                                Text(
+                                    "Gemini Live Model",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                for (modelInfo in VoiceSettingsRepository.SUPPORTED_LIVE_MODELS) {
+                                    val isModelSelected = voiceSettings.geminiLiveModel == modelInfo.id
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(8.dp))
+                                            .clickable {
+                                                scope.launch {
+                                                    voiceSettingsRepository.updateGeminiLiveModel(modelInfo.id)
+                                                }
+                                            }
+                                            .padding(vertical = 6.dp, horizontal = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = isModelSelected,
+                                            onClick = {
+                                                scope.launch {
+                                                    voiceSettingsRepository.updateGeminiLiveModel(modelInfo.id)
+                                                }
+                                            }
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Column {
+                                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                                Text(
+                                                    modelInfo.displayName,
+                                                    style = MaterialTheme.typography.bodyMedium,
+                                                    fontWeight = if (isModelSelected) FontWeight.Bold else FontWeight.Normal
+                                                )
+                                                if (modelInfo.requiresThinkingConfig) {
+                                                    Spacer(Modifier.width(6.dp))
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = MaterialTheme.colorScheme.secondaryContainer
+                                                    ) {
+                                                        Text(
+                                                            "Thinking",
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                        )
+                                                    }
+                                                }
+                                                if (modelInfo.isLegacy) {
+                                                    Spacer(Modifier.width(6.dp))
+                                                    Surface(
+                                                        shape = RoundedCornerShape(4.dp),
+                                                        color = MaterialTheme.colorScheme.surfaceVariant
+                                                    ) {
+                                                        Text(
+                                                            "Legacy",
+                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                            Text(
+                                                modelInfo.description,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                            )
+                                            Text(
+                                                modelInfo.id,
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.outline
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(12.dp))
+
+                                // Live Voice Selection
+                                Text(
+                                    "Gemini Live Prebuilt Voice",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    fontWeight = FontWeight.Medium
+                                )
+                                Spacer(Modifier.height(4.dp))
+                                val liveVoices = listOf(
+                                    "Puck" to "Clear, mid-range male voice (Confident & approachable)",
+                                    "Charon" to "Smooth, deep male voice (Calm & conversational)",
+                                    "Kore" to "Balanced, clear female voice (Natural & composed)",
+                                    "Fenrir" to "Friendly, lively male voice (Energetic & crisp)",
+                                    "Aoede" to "Expressive, thoughtful female voice (Warm & engaging)"
+                                )
+                                liveVoices.forEach { (voiceId, desc) ->
+                                    val isVoiceSelected = voiceSettings.geminiLiveVoice.equals(voiceId, ignoreCase = true)
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clip(RoundedCornerShape(6.dp))
+                                            .clickable {
+                                                scope.launch {
+                                                    voiceSettingsRepository.updateGeminiLiveVoice(voiceId)
+                                                }
+                                            }
+                                            .padding(vertical = 4.dp),
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        RadioButton(
+                                            selected = isVoiceSelected,
+                                            onClick = {
+                                                scope.launch {
+                                                    voiceSettingsRepository.updateGeminiLiveVoice(voiceId)
+                                                }
+                                            }
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Column {
+                                            Text(voiceId, style = MaterialTheme.typography.bodyMedium, fontWeight = if (isVoiceSelected) FontWeight.SemiBold else FontWeight.Normal)
+                                            Text(desc, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             // Section 0: Vosk Multi-Wake-Word System
             item {
@@ -984,10 +1297,14 @@ fun VoiceSettingsScreen(
                         Spacer(Modifier.height(16.dp))
 
                         // Speech Rate Slider
-                        Text("Speech Rate: ${"%.2f".format(voiceSettings.speechRate)}x", style = MaterialTheme.typography.bodyMedium)
+                        var localSpeechRate by remember(voiceSettings.speechRate) { mutableStateOf(voiceSettings.speechRate) }
+                        Text("Speech Rate: ${"%.2f".format(localSpeechRate)}x", style = MaterialTheme.typography.bodyMedium)
                         Slider(
-                            value = voiceSettings.speechRate,
-                            onValueChange = { rate -> scope.launch { voiceSettingsRepository.updateSpeechRate(rate) } },
+                            value = localSpeechRate,
+                            onValueChange = { localSpeechRate = it },
+                            onValueChangeFinished = {
+                                scope.launch { voiceSettingsRepository.updateSpeechRate(localSpeechRate) }
+                            },
                             valueRange = 0.5f..2.0f,
                             steps = 15
                         )
@@ -995,10 +1312,14 @@ fun VoiceSettingsScreen(
                         Spacer(Modifier.height(8.dp))
 
                         // Pitch Slider
-                        Text("Speech Pitch: ${"%.2f".format(voiceSettings.pitch)}x", style = MaterialTheme.typography.bodyMedium)
+                        var localPitch by remember(voiceSettings.pitch) { mutableStateOf(voiceSettings.pitch) }
+                        Text("Speech Pitch: ${"%.2f".format(localPitch)}x", style = MaterialTheme.typography.bodyMedium)
                         Slider(
-                            value = voiceSettings.pitch,
-                            onValueChange = { pitch -> scope.launch { voiceSettingsRepository.updatePitch(pitch) } },
+                            value = localPitch,
+                            onValueChange = { localPitch = it },
+                            onValueChangeFinished = {
+                                scope.launch { voiceSettingsRepository.updatePitch(localPitch) }
+                            },
                             valueRange = 0.5f..2.0f,
                             steps = 15
                         )
@@ -1135,6 +1456,89 @@ private fun LanguageDropdown(
                         expanded = false
                     }
                 )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LiveConnectionStatusIndicator(orchestrator: VoiceConversationOrchestrator) {
+    val sessionState by orchestrator.sessionState.collectAsState()
+
+    Column(modifier = Modifier.fillMaxWidth()) {
+        Text(
+            "Connection Status",
+            style = MaterialTheme.typography.bodyMedium,
+            fontWeight = FontWeight.Medium
+        )
+        Spacer(Modifier.height(4.dp))
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(
+                    when (sessionState.state) {
+                        VoiceState.LISTENING, VoiceState.SPEAKING -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                        VoiceState.THINKING, VoiceState.TRANSCRIBING -> MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.5f)
+                        VoiceState.ERROR -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                        else -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                    },
+                    RoundedCornerShape(8.dp)
+                )
+                .padding(horizontal = 10.dp, vertical = 8.dp)
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .clip(CircleShape)
+                    .background(
+                        when (sessionState.state) {
+                            VoiceState.LISTENING, VoiceState.SPEAKING -> MaterialTheme.colorScheme.primary
+                            VoiceState.THINKING, VoiceState.TRANSCRIBING -> MaterialTheme.colorScheme.secondary
+                            VoiceState.ERROR -> MaterialTheme.colorScheme.error
+                            else -> MaterialTheme.colorScheme.outline
+                        }
+                    )
+            )
+            Spacer(Modifier.width(8.dp))
+            Text(
+                text = when (sessionState.state) {
+                    VoiceState.LISTENING -> "Connected · Listening for speech"
+                    VoiceState.SPEAKING -> "Connected · Streaming Live Audio"
+                    VoiceState.THINKING -> "Connecting to Live WebSocket..."
+                    VoiceState.TRANSCRIBING -> "Transcribing..."
+                    VoiceState.PAUSED -> "Microphone Paused"
+                    VoiceState.INTERRUPTED -> "Interrupted"
+                    VoiceState.ERROR -> "Connection Failed"
+                    VoiceState.IDLE -> "Ready to Connect (Idle)"
+                    else -> "Ready"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+                color = MaterialTheme.colorScheme.onSurface
+            )
+        }
+
+        if (sessionState.state == VoiceState.ERROR && !sessionState.errorMessage.isNullOrBlank()) {
+            Spacer(Modifier.height(6.dp))
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer),
+                shape = RoundedCornerShape(8.dp)
+            ) {
+                Column(modifier = Modifier.padding(10.dp)) {
+                    Text(
+                        "Detailed Error",
+                        style = MaterialTheme.typography.labelSmall,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                    Text(
+                        sessionState.errorMessage ?: "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer
+                    )
+                }
             }
         }
     }

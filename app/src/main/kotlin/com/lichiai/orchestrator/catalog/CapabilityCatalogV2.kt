@@ -99,13 +99,280 @@ class CapabilityCatalogV2(
                     actionName = "SEARCH",
                     description = "Retrieve web sources and answers for a specific informational query.",
                     requiredParameters = listOf("query"),
-                    optionalParameters = listOf("news", "images"),
+                    optionalParameters = listOf("news", "images", "domain"),
                     exampleArguments = mapOf("query" to "iPhone 17 Pro price", "news" to "false")
                 )
             ),
             riskLevel = RiskLevel.LOW,
             verificationDescription = "Verified via search response containing citations, sources, and verified content.",
             isAvailable = isWebSearchEnabled
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.DORK_SEARCH,
+            name = "Advanced Dork Search",
+            purpose = "Controlled advanced public-web search supporting site:, intitle:, inurl:, filetype:, and exact phrases.",
+            whenToUse = "When a query requires specific search operators, filetype filtering (e.g. filetype:pdf), or exact title/URL constraints on the public web.",
+            whenNotToUse = "For credential hunting or unauthorized security exploits (which are strictly forbidden).",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "DORK_SEARCH",
+                    description = "Execute structured search operators on public web sources.",
+                    requiredParameters = listOf("query"),
+                    optionalParameters = listOf("site", "fileType", "inTitle"),
+                    exampleArguments = mapOf("query" to "site:developer.android.com \"VoiceInteractionService\"")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via structured dork operator query execution and search results."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.SITE_SEARCH,
+            name = "Domain Site Search",
+            purpose = "Search and crawl specifically within a targeted website domain.",
+            whenToUse = "When user asks to search specifically within a single site (e.g. 'Search Google Android docs for VoiceInteractionService').",
+            whenNotToUse = "For open general web queries with no target domain.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "SITE_SEARCH",
+                    description = "Search within a targeted domain and extract relevant pages.",
+                    requiredParameters = listOf("domain", "query"),
+                    optionalParameters = listOf("maxPages"),
+                    exampleArguments = mapOf("domain" to "developer.android.com", "query" to "VoiceInteractionService")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via domain-constrained search and internal link extraction."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.DEEP_SEARCH,
+            name = "Autonomous Deep Search",
+            purpose = "Multi-step in-depth web research pipeline decomposing complex queries, comparing multi-provider sources, and synthesizing facts.",
+            whenToUse = "When user asks complex questions requiring multi-angle research, deep factual comparisons, or comprehensive investigations.",
+            whenNotToUse = "For quick single-fact lookups or simple chit-chat.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "DEEP_SEARCH",
+                    description = "Execute multi-query search, deduplication, content extraction, and synthesis.",
+                    requiredParameters = listOf("query"),
+                    optionalParameters = listOf("maxBudget"),
+                    exampleArguments = mapOf("query" to "Best laptops under ₹80,000 comparison")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via multi-provider responses, deduplicated sources, and fact verification."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.RESEARCH,
+            name = "Structured Research & Synthesis",
+            purpose = "Conduct structured research producing questions, sources, evidence, claims, consensus, and explicit disagreement reporting.",
+            whenToUse = "When user needs a structured investigation where sources might disagree, requiring transparent claim-by-claim verification.",
+            whenNotToUse = "When the user wants simple navigational commands in the browser.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "RESEARCH",
+                    description = "Conduct structured multi-source research with conflict detection.",
+                    requiredParameters = listOf("topic"),
+                    optionalParameters = listOf("queries"),
+                    exampleArguments = mapOf("topic" to "Quantum computing roadmap 2026")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via structured research report containing sources, claims, and agreement scores."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.NAVIGATE,
+            name = "Browser Navigate",
+            purpose = "Navigate to URLs, go back, forward, or reload in the Chromium browser engine.",
+            whenToUse = "When the user or plan requires opening a URL or moving through browser history.",
+            whenNotToUse = "For purely text-based search queries without a target URL.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "OPEN_URL",
+                    description = "Navigate directly to a URL.",
+                    requiredParameters = listOf("url"),
+                    exampleArguments = mapOf("url" to "https://news.ycombinator.com")
+                ),
+                ActionSpec(
+                    actionName = "BACK",
+                    description = "Navigate back in history.",
+                    requiredParameters = emptyList(),
+                    exampleArguments = emptyMap()
+                ),
+                ActionSpec(
+                    actionName = "FORWARD",
+                    description = "Navigate forward in history.",
+                    requiredParameters = emptyList(),
+                    exampleArguments = emptyMap()
+                ),
+                ActionSpec(
+                    actionName = "RELOAD",
+                    description = "Reload current page.",
+                    requiredParameters = emptyList(),
+                    exampleArguments = emptyMap()
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via page URL change or reload completion."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.EXTRACT,
+            name = "Content Extraction",
+            purpose = "Extract structured text, tables, links, headings, and prices with temporal validity (CURRENT, HISTORICAL, ESTIMATED).",
+            whenToUse = "When content from the active browser page or target URL needs to be parsed into structured data.",
+            whenNotToUse = "When merely navigating without needing data extraction.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "EXTRACT",
+                    description = "Extract structured content from the current web page.",
+                    requiredParameters = emptyList(),
+                    optionalParameters = listOf("target"),
+                    exampleArguments = mapOf("target" to "ALL")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via extracted text, table, or price records."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.FIND_ON_PAGE,
+            name = "Find On Page",
+            purpose = "Search and highlight specific text or keywords on the current active web page.",
+            whenToUse = "When user wants to find a specific phrase or keyword on the loaded page.",
+            whenNotToUse = "When searching across the whole internet.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "FIND",
+                    description = "Find and highlight keyword matches on the active page.",
+                    requiredParameters = listOf("keyword"),
+                    exampleArguments = mapOf("keyword" to "specifications")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via WebView search matches count."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.COMPARE,
+            name = "Cross-Source Comparison",
+            purpose = "Compare normalized attributes (price, specs, features, availability) across multiple products or sources.",
+            whenToUse = "When user asks to compare 2 or more products, services, or claims ('Compare laptop A and laptop B').",
+            whenNotToUse = "For single-item research.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "COMPARE",
+                    description = "Generate normalized comparison matrix across entities.",
+                    requiredParameters = listOf("entities"),
+                    optionalParameters = listOf("criteria"),
+                    exampleArguments = mapOf("entities" to "MacBook Air M3 vs Dell XPS 13")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via comparison matrix containing verified attributes."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.VERIFY,
+            name = "Fact & Page Verification",
+            purpose = "Verify factual claims against official, primary, or reputable secondary web sources.",
+            whenToUse = "When a claim needs explicit verification against official sources (e.g. checking listed price on apple.com).",
+            whenNotToUse = "When no factual claim is provided.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "VERIFY",
+                    description = "Verify a specific claim against official or primary sources.",
+                    requiredParameters = listOf("claim"),
+                    optionalParameters = listOf("domain"),
+                    exampleArguments = mapOf("claim" to "iPhone 17 base storage is 256GB", "domain" to "apple.com")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via fact evidence score and official source match."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.FORMS,
+            name = "Form Fill & Submit",
+            purpose = "Discover input fields, type values, select options, and submit forms safely.",
+            whenToUse = "When user wants to fill out a web form, search box, or input field on a webpage.",
+            whenNotToUse = "For password or sensitive financial credential submission without user authorization.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "FILL_AND_SUBMIT",
+                    description = "Fill inputs and submit the form.",
+                    requiredParameters = listOf("fields"),
+                    optionalParameters = listOf("submit"),
+                    exampleArguments = mapOf("fields" to "query: Android SDK", "submit" to "true")
+                )
+            ),
+            riskLevel = RiskLevel.MEDIUM,
+            verificationDescription = "Verified via field value mutation and form submission event."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.DOWNLOAD,
+            name = "Browser Download",
+            purpose = "Initiate and track file downloads safely from the web.",
+            whenToUse = "When user wants to download a file, PDF, or APK from a web link.",
+            whenNotToUse = "When user simply wants to view content without downloading.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "DOWNLOAD",
+                    description = "Download a file from a URL.",
+                    requiredParameters = listOf("url"),
+                    optionalParameters = listOf("filename"),
+                    exampleArguments = mapOf("url" to "https://example.com/doc.pdf")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via Android DownloadManager queue record."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.UPLOAD,
+            name = "Browser Upload",
+            purpose = "Select and upload a file to a web form input with user authorization.",
+            whenToUse = "When a webpage requires uploading an attachment or document.",
+            whenNotToUse = "For unauthorized data transmission.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "UPLOAD",
+                    description = "Upload a file to a file input on the page.",
+                    requiredParameters = listOf("filePath"),
+                    optionalParameters = listOf("targetId"),
+                    exampleArguments = mapOf("filePath" to "/storage/doc.pdf")
+                )
+            ),
+            riskLevel = RiskLevel.MEDIUM,
+            verificationDescription = "Verified via file input value attachment."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.MULTI_TAB,
+            name = "Multi-Tab Manager",
+            purpose = "Manage multiple browser tabs, categorize research/source tabs, and switch or close tabs.",
+            whenToUse = "When multi-tab browsing is requested (open new tab, switch tab, close tab).",
+            whenNotToUse = "For single-tab browsing.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "MANAGE_TABS",
+                    description = "Perform tab management action (OPEN, CLOSE, SWITCH, LIST).",
+                    requiredParameters = listOf("action"),
+                    optionalParameters = listOf("tabId", "url"),
+                    exampleArguments = mapOf("action" to "OPEN", "url" to "https://google.com")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via active tab ID update in TabManager."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.PAGE_SUMMARY,
+            name = "Page Summary",
+            purpose = "Distill the active web page into an executive summary, bullet points, and extracted facts.",
+            whenToUse = "When user asks to summarize the currently opened webpage or article.",
+            whenNotToUse = "When user wants full raw HTML or page navigation.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "SUMMARIZE",
+                    description = "Generate a structured summary of the current page.",
+                    requiredParameters = emptyList(),
+                    exampleArguments = emptyMap()
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via summary text containing page title and key points."
         ),
         CapabilitySpec(
             capability = LichiCapability.ANDROID_AGENT,

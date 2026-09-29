@@ -23,19 +23,19 @@ object PromptVars {
         model: String = "",
         provider: String = "",
         assistant: String = "",
+        locale: Locale = Locale.getDefault(),
+        date: Date = Date()
     ): String {
         if (template.isEmpty()) return template
-        val now = Date()
-        val locale = Locale.getDefault()
         val map = mapOf(
             "model" to model,
             "provider" to provider,
             "assistant" to assistant,
-            "date" to SimpleDateFormat("yyyy-MM-dd", locale).format(now),
-            "time" to SimpleDateFormat("HH:mm", locale).format(now),
-            "datetime" to SimpleDateFormat("yyyy-MM-dd HH:mm", locale).format(now),
+            "date" to SimpleDateFormat("yyyy-MM-dd", locale).format(date),
+            "time" to SimpleDateFormat("HH:mm", locale).format(date),
+            "datetime" to SimpleDateFormat("yyyy-MM-dd HH:mm", locale).format(date),
             "locale" to locale.toLanguageTag(),
-            "weekday" to SimpleDateFormat("EEEE", locale).format(now),
+            "weekday" to SimpleDateFormat("EEEE", locale).format(date),
         )
         var out = template
         for ((k, v) in map) {

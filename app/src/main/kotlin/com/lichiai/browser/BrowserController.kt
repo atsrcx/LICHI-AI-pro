@@ -46,6 +46,7 @@ class BrowserController(
     val permissionManager = BrowserPermissionManager()
     val providerManager = BrowserProviderManager(context)
     val memory = BrowserMemory(context)
+    val inspectionCoordinator = com.lichiai.browser.inspection.BrowserInspectionCoordinator(context, coroutineScope, eventBus)
 
     private val llmClient = BrowserLLMClient(providerManager)
     val toolRegistry = BrowserToolRegistry(this)
@@ -143,9 +144,11 @@ class BrowserController(
             context = context,
             eventBus = eventBus,
             permissionManager = permissionManager,
-            isIncognito = tab.isIncognito
+            isIncognito = tab.isIncognito,
+            instrumentationHub = inspectionCoordinator.hub
         ).apply {
             webView.setDownloadListener { url, userAgent, contentDisposition, mimetype, contentLength ->
+                inspectionCoordinator.hub.onDownloadTriggered(url, userAgent, contentDisposition, mimetype, contentLength)
                 downloadManager.startDownload(url, userAgent, contentDisposition, mimetype, contentLength)
             }
         }
@@ -341,6 +344,51 @@ class BrowserController(
     override suspend fun stopTask(): Boolean {
         agent.stopActiveTask()
         return true
+    }
+
+    // --- DevTools & Browser Inspection Capabilities ---
+
+    suspend fun inspectCurrentPage(
+        mode: com.lichiai.browser.inspection.model.InspectionMode = com.lichiai.browser.inspection.model.InspectionMode.FULL_INSPECTION,
+        taskId: String = "",
+        messageId: String = "",
+        conversationId: String = ""
+    ): com.lichiai.browser.inspection.model.ComprehensiveInspectionReport = withContext(Dispatchers.Main) {
+        val activeTab = tabManager.activeTab
+        val tabId = activeTab?.id ?: tabManager.activeTabId.value
+        val eng = _activeEngine.value ?: (activeTab?.let { getOrCreateEngine(it) })
+        inspectionCoordinator.inspectCurrentPage(
+            engine = eng,
+            tabId = tabId,
+            mode = mode,
+            taskId = taskId,
+            messageId = messageId,
+            conversationId = conversationId
+        )
+    }
+
+    suspend fun discoverEndpoints(): List<com.lichiai.browser.inspection.endpoint.EndpointRecord> = withContext(Dispatchers.Main) {
+        val eng = _activeEngine.value
+        inspectionCoordinator.discoverEndpoints(eng)
+    }
+
+    suspend fun discoverDownloads(): List<com.lichiai.browser.inspection.download.DownloadCandidate> = withContext(Dispatchers.Main) {
+        val eng = _activeEngine.value
+        inspectionCoordinator.discoverDownloads(eng)
+    }
+
+    suspend fun discoverResources(): List<com.lichiai.browser.inspection.resources.ResourceRecord> = withContext(Dispatchers.Main) {
+        val eng = _activeEngine.value
+        inspectionCoordinator.discoverResources(eng)
+    }
+
+    suspend fun discoverLinks(): List<com.lichiai.browser.inspection.resources.DiscoveredUrlRecord> = withContext(Dispatchers.Main) {
+        val eng = _activeEngine.value
+        inspectionCoordinator.discoverLinks(eng)
+    }
+
+    suspend fun analyzeNetwork(): com.lichiai.browser.inspection.network.NetworkAnalysisReport = withContext(Dispatchers.Main) {
+        inspectionCoordinator.analyzeNetwork()
     }
 }
 

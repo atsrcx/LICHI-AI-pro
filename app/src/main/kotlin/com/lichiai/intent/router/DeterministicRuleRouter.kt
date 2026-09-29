@@ -169,6 +169,12 @@ class DeterministicRuleRouter(
             return Pair(terminalMatch, 1.0f)
         }
 
+        // 6.7 DevTools & Browser Inspection commands
+        val inspectMatch = matchInspectionCommand(lower, trimmed)
+        if (inspectMatch != null) {
+            return Pair(inspectMatch, 1.0f)
+        }
+
         // 7. Device controls (Volume, Brightness, Flashlight)
         val deviceControl = matchDeviceControl(lower)
         if (deviceControl != null) {
@@ -290,5 +296,40 @@ class DeterministicRuleRouter(
         }
 
         return null
+    }
+
+    private fun matchInspectionCommand(lower: String, rawText: String): ResolvedIntent.InspectTask? {
+        val isInspect = lower.contains("inspect") || lower.contains("devtools") ||
+            lower.contains("api endpoint") || lower.contains("api endpoints") ||
+            lower.contains("download link") || lower.contains("download links") ||
+            lower.contains("direct download") || lower.contains("resource") ||
+            lower.contains("resources") || lower.contains("script") || lower.contains("scripts") ||
+            (lower.contains("page") && (lower.contains("links nikalo") || lower.contains("forms batao") || lower.contains("requests abhi hui") || lower.contains("saare links") || lower.contains("links"))) ||
+            lower.contains("technical structure") ||
+            (lower.contains("website") && (lower.contains("deeply analyse") || lower.contains("urls discover") || lower.contains("saare api") || lower.contains("structure"))) ||
+            lower.contains("network requests") || lower.contains("network request") || lower.contains("external domains") ||
+            lower.contains("inspection report") || lower.contains("observed apis")
+
+        if (!isInspect) return null
+
+        val showUi = lower.contains("second screen") || lower.contains("screen par") || lower.contains("devtools kholo") || lower.contains("report dikhao")
+
+        val ack = when {
+            lower.contains("link") || lower.contains("url") -> "Page ke saare links aur URLs discover kar rahi hoon..."
+            lower.contains("endpoint") || lower.contains("api") -> "Website ke saare observed API endpoints identify kar rahi hoon..."
+            lower.contains("download") -> "Direct download links scan kar rahi hoon..."
+            lower.contains("form") -> "Page ke HTML forms inspect kar rahi hoon..."
+            lower.contains("script") || lower.contains("domain") || lower.contains("resource") -> "Scripts, external domains aur resources analyze kar rahi hoon..."
+            lower.contains("network") || lower.contains("request") -> "Network requests aur latency timeline analyze kar rahi hoon..."
+            lower.contains("structure") -> "Website ka technical structure analyze kar rahi hoon..."
+            else -> "Website ki deep technical inspection kar rahi hoon..."
+        }
+
+        return ResolvedIntent.InspectTask(
+            mode = "FULL_INSPECTION",
+            query = rawText,
+            showUi = showUi,
+            naturalAcknowledgment = ack
+        )
     }
 }

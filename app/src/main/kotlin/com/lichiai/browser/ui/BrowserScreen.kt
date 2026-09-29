@@ -31,10 +31,16 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.NightlightRound
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Bookmark
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Language
@@ -104,6 +110,10 @@ fun BrowserScreen(
     var showSettingsDialog by remember { mutableStateOf(false) }
     var showAiCopilotSheet by remember { mutableStateOf(false) }
     var showResearchWorkspace by remember { mutableStateOf(false) }
+    var showInspectionWorkspace by remember { mutableStateOf(false) }
+
+    val activeInspectionReport by controller.inspectionCoordinator.activeReport.collectAsState()
+    val isInspecting by controller.inspectionCoordinator.isInspecting.collectAsState()
 
     var agentPromptInput by remember { mutableStateOf("") }
 
@@ -123,54 +133,312 @@ fun BrowserScreen(
             .statusBarsPadding()
             .navigationBarsPadding(),
         topBar = {
-            Column {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Color.White)
+            ) {
+                // ROW 1: [ ≡ ]  [ ←  → ]  [ 🔍 Search or ask Lichi... ]  [ ⋮ ]
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.surface),
+                        .padding(horizontal = 8.dp, vertical = 6.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     IconButton(
                         onClick = onOpenDrawer,
-                        modifier = Modifier.size(40.dp)
+                        modifier = Modifier.size(38.dp)
                     ) {
                         Icon(
                             Icons.Default.Menu,
                             contentDescription = "Open Navigation Menu",
-                            tint = MaterialTheme.colorScheme.onSurface
+                            tint = Color(0xFF1E293B),
+                            modifier = Modifier.size(22.dp)
                         )
                     }
 
-                    BrowserAddressBar(
-                        tab = activeTab,
-                        openTabsCount = tabs.size,
-                        isAgentBusy = isAgentBusy,
-                        agentStatusText = if (isAgentBusy) "✦ Agent working..." else null,
-                        onNavigate = { input ->
-                            scope.launch {
-                                when (val target = com.lichiai.browser.api.BrowserUrlResolver.resolve(input)) {
-                                    is com.lichiai.browser.api.BrowserUrlResolver.ResolvedTarget.DirectUrl -> {
-                                        controller.navigate(target.url)
+                    Spacer(Modifier.width(4.dp))
+
+                    // Capsule with Back and Forward buttons
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color(0xFFF1F5F9),
+                        border = BorderStroke(0.8.dp, Color(0xFFE2E8F0)),
+                        modifier = Modifier.height(36.dp)
+                    ) {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            IconButton(
+                                onClick = { scope.launch { controller.goBack() } },
+                                enabled = activeTab?.canGoBack == true,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back",
+                                    tint = if (activeTab?.canGoBack == true) Color(0xFF1E293B) else Color(0xFF94A3B8),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                            IconButton(
+                                onClick = { scope.launch { controller.goForward() } },
+                                enabled = activeTab?.canGoForward == true,
+                                modifier = Modifier.size(34.dp)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.ArrowForward,
+                                    contentDescription = "Forward",
+                                    tint = if (activeTab?.canGoForward == true) Color(0xFF1E293B) else Color(0xFF94A3B8),
+                                    modifier = Modifier.size(16.dp)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(Modifier.width(8.dp))
+
+                    // Search or ask Lichi Capsule Omnibox
+                    var topBarSearch by remember(activeTab?.url) {
+                        mutableStateOf(activeTab?.url?.takeIf { it != "about:blank" } ?: "")
+                    }
+
+                    Surface(
+                        shape = RoundedCornerShape(20.dp),
+                        color = Color(0xFFF1F5F9),
+                        border = BorderStroke(0.8.dp, Color(0xFFE2E8F0)),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(36.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Icon(
+                                Icons.Default.Search,
+                                contentDescription = null,
+                                tint = Color(0xFF64748B),
+                                modifier = Modifier.size(17.dp)
+                            )
+                            Spacer(Modifier.width(8.dp))
+                            BasicTextField(
+                                value = topBarSearch,
+                                onValueChange = { topBarSearch = it },
+                                singleLine = true,
+                                textStyle = MaterialTheme.typography.bodyMedium.copy(
+                                    color = Color(0xFF0F172A),
+                                    fontSize = 13.5.sp
+                                ),
+                                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                                keyboardActions = KeyboardActions(
+                                    onSearch = {
+                                        if (topBarSearch.isNotBlank()) {
+                                            scope.launch {
+                                                when (val target = com.lichiai.browser.api.BrowserUrlResolver.resolve(topBarSearch.trim())) {
+                                                    is com.lichiai.browser.api.BrowserUrlResolver.ResolvedTarget.DirectUrl -> {
+                                                        controller.navigate(target.url)
+                                                    }
+                                                    is com.lichiai.browser.api.BrowserUrlResolver.ResolvedTarget.SearchQuery -> {
+                                                        controller.search(target.query, target.explicitEngine)
+                                                    }
+                                                }
+                                            }
+                                        }
                                     }
-                                    is com.lichiai.browser.api.BrowserUrlResolver.ResolvedTarget.SearchQuery -> {
-                                        controller.search(target.query, target.explicitEngine)
+                                ),
+                                modifier = Modifier.weight(1f),
+                                decorationBox = { innerTextField ->
+                                    if (topBarSearch.isEmpty()) {
+                                        Text(
+                                            text = "Search or ask Lichi...",
+                                            style = MaterialTheme.typography.bodyMedium.copy(
+                                                color = Color(0xFF94A3B8),
+                                                fontSize = 13.5.sp
+                                            ),
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis
+                                        )
                                     }
+                                    innerTextField()
+                                }
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.width(4.dp))
+
+                    // Three Dots Menu
+                    IconButton(
+                        onClick = { showMenuSheet = true },
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Icon(
+                            Icons.Default.MoreVert,
+                            contentDescription = "Options",
+                            tint = Color(0xFF1E293B),
+                            modifier = Modifier.size(20.dp)
+                        )
+                    }
+                }
+
+                // ROW 2: [ ⌂ ]  [ + Tab ]  [ 🗂 2 ]  [ 🌙 ]  ... [ ✨ Copilot ]
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        // Home
+                        IconButton(
+                            onClick = { scope.launch { controller.navigate("about:blank") } },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.Home,
+                                contentDescription = "Home",
+                                tint = Color(0xFF334155),
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+
+                        // + Tab (Light blue tinted pill)
+                        Surface(
+                            shape = RoundedCornerShape(16.dp),
+                            color = Color(0xFFE0E7FF),
+                            modifier = Modifier.clickable { scope.launch { controller.openTab() } }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Add,
+                                    contentDescription = "New Tab",
+                                    tint = Color(0xFF2563EB),
+                                    modifier = Modifier.size(15.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Text(
+                                    text = "Tab",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        color = Color(0xFF2563EB),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                )
+                            }
+                        }
+
+                        // Tabs Count Badge
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = Color.Transparent,
+                            modifier = Modifier.clickable { showTabSheet = true }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    Icons.Default.Layers,
+                                    contentDescription = "Tabs",
+                                    tint = Color(0xFF334155),
+                                    modifier = Modifier.size(20.dp)
+                                )
+                                Spacer(Modifier.width(4.dp))
+                                Box(
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clip(CircleShape)
+                                        .background(Color(0xFF0F172A)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = "${tabs.size}",
+                                        color = Color.White,
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontSize = 10.5.sp,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    )
                                 }
                             }
-                        },
-                        onBack = { scope.launch { controller.goBack() } },
-                        onForward = { scope.launch { controller.goForward() } },
-                        onReload = {
-                            if (activeTab?.isLoading == true) {
-                                activeEngine?.stopLoading()
-                            } else {
-                                scope.launch { controller.reload() }
-                            }
-                        },
-                        onOpenTabs = { showTabSheet = true },
-                        onOpenMenu = { showMenuSheet = true },
-                        modifier = Modifier.weight(1f)
-                    )
+                        }
+
+                        // Night / Mode Toggle (Moon)
+                        IconButton(
+                            onClick = {
+                                activeTab?.let {
+                                    val newMode = controller.tabManager.toggleDesktopMode(it.id)
+                                    activeEngine?.setDesktopMode(newMode)
+                                }
+                            },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.NightlightRound,
+                                contentDescription = "Night Mode",
+                                tint = Color(0xFF334155),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+
+                        // DevTools / Inspect Button
+                        IconButton(
+                            onClick = {
+                                showInspectionWorkspace = true
+                                scope.launch {
+                                    runCatching {
+                                        controller.inspectCurrentPage()
+                                    }.onFailure { err ->
+                                        android.util.Log.e("BrowserScreen", "Failed to inspect page", err)
+                                    }
+                                }
+                            },
+                            modifier = Modifier.size(36.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.BugReport,
+                                contentDescription = "Inspect DevTools",
+                                tint = Color(0xFF334155),
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+
+                    // Copilot Pill Button (Dark Navy)
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = Color(0xFF1E293B),
+                        modifier = Modifier.clickable { showAiCopilotSheet = true }
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp)
+                        ) {
+                            Icon(
+                                Icons.Default.AutoAwesome,
+                                contentDescription = "Copilot",
+                                tint = Color(0xFF93C5FD),
+                                modifier = Modifier.size(14.dp)
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(
+                                text = "Copilot",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    color = Color.White,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp
+                                )
+                            )
+                        }
+                    }
                 }
 
                 if (activeTab?.isLoading == true) {
@@ -179,113 +447,26 @@ fun BrowserScreen(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(2.5.dp),
-                        color = MaterialTheme.colorScheme.primary,
+                        color = Color(0xFF2563EB),
                         trackColor = Color.Transparent
                     )
                 }
             }
         },
         bottomBar = {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .imePadding()
-                    .background(MaterialTheme.colorScheme.surface)
-            ) {
-                // Live Browser Agent Activity Card
-                BrowserAgentActivityCard(
-                    actionLog = controller.actionLog,
-                    isBusy = isAgentBusy,
-                    onStop = { controller.agent.stopActiveTask() }
-                )
-
-                // Premium Bottom Control Bar: [Back] [Home] [+] [Tabs] [Lichi AI Copilot]
-                Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainer,
-                    tonalElevation = 3.dp,
-                    modifier = Modifier.fillMaxWidth()
+            if (activeTab != null && activeTab.url != "about:blank" && activeTab.url.isNotBlank()) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .imePadding()
+                        .background(MaterialTheme.colorScheme.surface)
                 ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 6.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        // Back
-                        IconButton(
-                            onClick = { scope.launch { controller.goBack() } },
-                            enabled = activeTab?.canGoBack == true,
-                            modifier = Modifier.size(42.dp)
-                        ) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = if (activeTab?.canGoBack == true) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f)
-                            )
-                        }
-
-                        // Home / Start
-                        IconButton(
-                            onClick = { scope.launch { controller.navigate("about:blank") } },
-                            modifier = Modifier.size(42.dp)
-                        ) {
-                            Icon(Icons.Default.Home, contentDescription = "Home", tint = MaterialTheme.colorScheme.onSurface)
-                        }
-
-                        // New Tab Button (+)
-                        Surface(
-                            shape = CircleShape,
-                            color = MaterialTheme.colorScheme.primaryContainer,
-                            modifier = Modifier.clickable {
-                                scope.launch { controller.openTab() }
-                            }
-                        ) {
-                            Box(modifier = Modifier.size(38.dp), contentAlignment = Alignment.Center) {
-                                Icon(
-                                    Icons.Default.Add,
-                                    contentDescription = "New Tab",
-                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.size(20.dp)
-                                )
-                            }
-                        }
-
-                        // Tabs
-                        IconButton(
-                            onClick = { showTabSheet = true },
-                            modifier = Modifier.size(42.dp)
-                        ) {
-                            Icon(Icons.Default.Layers, contentDescription = "Tabs", tint = MaterialTheme.colorScheme.onSurface)
-                        }
-
-                        // Lichi AI Copilot Trigger
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.clickable { showAiCopilotSheet = true }
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp)
-                            ) {
-                                Icon(
-                                    Icons.Default.AutoAwesome,
-                                    contentDescription = "AI Copilot",
-                                    tint = MaterialTheme.colorScheme.onPrimary,
-                                    modifier = Modifier.size(16.dp)
-                                )
-                                Spacer(Modifier.width(4.dp))
-                                Text(
-                                    text = "Copilot",
-                                    style = MaterialTheme.typography.labelMedium.copy(
-                                        color = MaterialTheme.colorScheme.onPrimary,
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                )
-                            }
-                        }
-                    }
+                    // Live Browser Agent Activity Card
+                    BrowserAgentActivityCard(
+                        actionLog = controller.actionLog,
+                        isBusy = isAgentBusy,
+                        onStop = { controller.agent.stopActiveTask() }
+                    )
                 }
             }
         }
@@ -326,7 +507,7 @@ fun BrowserScreen(
 
             // 2. Start Page overlay shown when tab is on about:blank
             if (isBlank) {
-                BrowserStartPage(
+                BrowserModernStartPage(
                     onSearch = { query ->
                         scope.launch { controller.search(query) }
                     },
@@ -335,10 +516,7 @@ fun BrowserScreen(
                     },
                     onOpenCopilot = { showAiCopilotSheet = true },
                     onOpenResearch = { showResearchWorkspace = true },
-                    bookmarks = bookmarks,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .background(MaterialTheme.colorScheme.background)
+                    modifier = Modifier.fillMaxSize()
                 )
             }
 
@@ -391,6 +569,16 @@ fun BrowserScreen(
             onClearHistory = { scope.launch { controller.storageManager.clearHistory() } },
             onClearCache = { activeEngine?.clearCacheAndCookies() },
             onOpenSettings = { showSettingsDialog = true },
+            onOpenInspection = {
+                showInspectionWorkspace = true
+                scope.launch {
+                    runCatching {
+                        controller.inspectCurrentPage()
+                    }.onFailure { err ->
+                        android.util.Log.e("BrowserScreen", "Failed to inspect page from menu", err)
+                    }
+                }
+            },
             onDismiss = { showMenuSheet = false }
         )
     }
@@ -425,6 +613,17 @@ fun BrowserScreen(
                 onDismiss = { showResearchWorkspace = false }
             )
         }
+    }
+
+    // DevTools & Browser Inspection Workspace Sheet
+    if (showInspectionWorkspace) {
+        com.lichiai.browser.inspection.ui.InspectionWorkspaceSheet(
+            report = activeInspectionReport,
+            isInspecting = isInspecting,
+            onRefresh = { scope.launch { controller.inspectCurrentPage() } },
+            onDownloadTrigger = { url -> controller.downloadManager.startDownload(url, null, null, null, 0L) },
+            onDismiss = { showInspectionWorkspace = false }
+        )
     }
 
     // High-Risk Confirmation Dialog

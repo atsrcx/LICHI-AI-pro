@@ -12,6 +12,21 @@ import kotlinx.serialization.Serializable
 enum class LichiCapability(val id: String, val displayName: String) {
     BROWSER("browser", "Lichi Browser"),
     WEB_SEARCH("web_search", "Real-Time Web Intelligence"),
+    DORK_SEARCH("dork_search", "Advanced Dork Search"),
+    SITE_SEARCH("site_search", "Domain Site Search"),
+    DEEP_SEARCH("deep_search", "Autonomous Deep Search"),
+    RESEARCH("research", "Structured Research"),
+    NAVIGATE("navigate", "Browser Navigate"),
+    EXTRACT("extract", "Content Extraction"),
+    FIND_ON_PAGE("find_on_page", "Find On Page"),
+    COMPARE("compare", "Cross-Source Comparison"),
+    VERIFY("verify", "Fact & Page Verification"),
+    FORMS("forms", "Form Fill & Submit"),
+    DOWNLOAD("download", "Browser Download"),
+    UPLOAD("upload", "Browser Upload"),
+    MULTI_TAB("multi_tab", "Multi-Tab Manager"),
+    PAGE_SUMMARY("page_summary", "Page Summary"),
+    INSPECT_PAGE("inspect_page", "Browser Inspection & DevTools"),
     ANDROID_AGENT("android_agent", "Autonomous Phone Agent V2"),
     CALLS("calls", "Universal Call Engine"),
     MEDIA_YOUTUBE("media_youtube", "Media & YouTube"),
@@ -205,6 +220,127 @@ sealed class ResolvedIntent {
         override val naturalAcknowledgment: String
     ) : ResolvedIntent() {
         override val capability: LichiCapability get() = LichiCapability.WEB_SEARCH
+    }
+
+    data class DorkSearchTask(
+        val query: String,
+        val site: String? = null,
+        val fileType: String? = null,
+        val exactPhrase: String? = null,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.DORK_SEARCH
+    }
+
+    data class SiteSearchTask(
+        val domain: String,
+        val query: String,
+        val maxPages: Int = 3,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.SITE_SEARCH
+    }
+
+    data class DeepSearchTask(
+        val query: String,
+        val maxBudgetQueries: Int = 3,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.DEEP_SEARCH
+    }
+
+    data class ResearchTask(
+        val topic: String,
+        val queries: List<String> = emptyList(),
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.RESEARCH
+    }
+
+    data class NavigateTask(
+        val url: String,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.NAVIGATE
+    }
+
+    data class ExtractTask(
+        val target: String = "ALL",
+        val url: String? = null,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.EXTRACT
+    }
+
+    data class FindOnPageTask(
+        val keyword: String,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.FIND_ON_PAGE
+    }
+
+    data class CompareTask(
+        val entities: List<String>,
+        val criteria: List<String> = emptyList(),
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.COMPARE
+    }
+
+    data class VerifyTask(
+        val claim: String,
+        val domain: String? = null,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.VERIFY
+    }
+
+    data class FormsTask(
+        val fieldValues: Map<String, String>,
+        val submit: Boolean = true,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.FORMS
+    }
+
+    data class DownloadTask(
+        val url: String,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.DOWNLOAD
+    }
+
+    data class UploadTask(
+        val targetIdOrIndex: String,
+        val filePath: String,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.UPLOAD
+    }
+
+    data class MultiTabTask(
+        val action: String, // OPEN, CLOSE, SWITCH, LIST
+        val tabId: String? = null,
+        val url: String? = null,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.MULTI_TAB
+    }
+
+    data class PageSummaryTask(
+        val focus: String? = null,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.PAGE_SUMMARY
+    }
+
+    data class InspectTask(
+        val mode: String = "FULL_INSPECTION",
+        val query: String = "",
+        val showUi: Boolean = false,
+        override val naturalAcknowledgment: String
+    ) : ResolvedIntent() {
+        override val capability: LichiCapability get() = LichiCapability.INSPECT_PAGE
     }
 
     data class AndroidAgentTask(

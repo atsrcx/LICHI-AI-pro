@@ -108,8 +108,14 @@ object ActorIdentifierResolver {
 
     private fun fromUrl(url: String): String {
         val cleanUrl = url.substringBefore("?").substringBefore("#").trimEnd('/')
-        val segments = cleanUrl.split("/").filter { it.isNotBlank() }
+        var segments = cleanUrl.split("/").filter { it.isNotBlank() }
         if (segments.isEmpty()) return ""
+
+        // Filter out known subpage endpoints like "api", "runs", "integrations", "settings", "input-schema"
+        val knownSubpages = setOf("api", "runs", "integrations", "settings", "input-schema", "readme", "changelog", "builds")
+        if (segments.size > 2 && segments.last().lowercase() in knownSubpages) {
+            segments = segments.dropLast(1)
+        }
 
         // e.g. https://apify.com/apify/instagram-profile-scraper -> segments: [https:, apify.com, apify, instagram-profile-scraper]
         // or https://console.apify.com/actors/shu8hvrXbJbY3Eb9W -> segments: [..., actors, shu8hvrXbJbY3Eb9W]

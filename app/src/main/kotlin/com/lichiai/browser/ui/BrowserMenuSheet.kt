@@ -13,6 +13,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.BookmarkBorder
+import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.DesktopWindows
@@ -62,6 +63,7 @@ fun BrowserMenuSheet(
     onClearHistory: () -> Unit,
     onClearCache: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenInspection: () -> Unit = {},
     onDismiss: () -> Unit
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -133,6 +135,16 @@ fun BrowserMenuSheet(
                         title = "Clear Cache & Cookies",
                         onClick = {
                             onClearCache()
+                            onDismiss()
+                        }
+                    )
+
+                    // Inspect & DevTools Intelligence
+                    BrowserMenuItem(
+                        icon = Icons.Default.BugReport,
+                        title = "Inspect & DevTools Intelligence",
+                        onClick = {
+                            onOpenInspection()
                             onDismiss()
                         }
                     )

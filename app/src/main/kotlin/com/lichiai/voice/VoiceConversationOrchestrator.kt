@@ -14,6 +14,9 @@ import com.lichiai.data.ConversationStore
 import com.lichiai.data.Message
 import com.lichiai.util.PromptVars
 import com.lichiai.util.newId
+import com.lichiai.data.AssistantStore
+import com.lichiai.assistant.resolver.ActiveAssistantResolver
+import com.lichiai.prompt.LichiPromptAssembler
 import com.lichiai.voice.conversation.SentenceBuffer
 import com.lichiai.voice.conversation.VoiceSessionState
 import com.lichiai.voice.conversation.VoiceState
@@ -35,6 +38,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -42,7 +46,7 @@ import kotlinx.coroutines.withContext
 class VoiceConversationOrchestrator(
     private val context: Context,
     private val llmClient: LlmClient,
-    private val voiceSettingsRepository: VoiceSettingsRepository,
+    val voiceSettingsRepository: VoiceSettingsRepository,
     private val settingsRepository: SettingsRepository,
     private val callEngine: UniversalCallEngine? = null,
     private val callActionExecutor: com.lichiai.calling.action.CallActionExecutor? = null,
@@ -55,9 +59,11 @@ class VoiceConversationOrchestrator(
     private val onExecuteBrowserCommand: ((String) -> Unit)? = null,
     private val universalIntentEngine: com.lichiai.intent.UniversalIntentEngine? = null,
     private val routeDispatcher: com.lichiai.intent.dispatcher.RouteDispatcher? = null,
-    private val taskOrchestratorV2: com.lichiai.orchestrator.UniversalTaskOrchestratorV2? = null
+    private val taskOrchestratorV2: com.lichiai.orchestrator.UniversalTaskOrchestratorV2? = null,
+    providerStore: com.lichiai.data.ProviderStore? = null
 ) : SpeechToTextListener, TextToSpeechListener {
 
+    private val internalProviderStore = providerStore ?: com.lichiai.data.ProviderStore(context)
     private val agentTool = autonomousAgentTool ?: com.lichiai.agent.bridge.AutonomousAgentTool(context)
     private val skillRepository = com.lichiai.skill.repository.SkillRepository.getInstance(context)
     val webIntelligence = webIntelligenceManager ?: com.lichiai.web.WebIntelligenceManager.getInstance(context)
@@ -71,9 +77,26 @@ class VoiceConversationOrchestrator(
     val agentLiveStatus: StateFlow<com.lichiai.agent.model.AgentLiveStatus>
         get() = agentTool.liveStatus
 
+    val geminiLiveEngine = com.lichiai.voice.live.GeminiLiveVoiceEngine(
+        context = context,
+        coroutineScope = orchestratorScope,
+        updateState = { transform -> _sessionState.update(transform) },
+        getState = { _sessionState.value },
+        webIntelligence = webIntelligence,
+        callEngine = callEngine,
+        callActionExecutor = callActionExecutor,
+        callActionIntentResolver = callActionIntentResolver,
+        taskOrchestratorV2 = taskOrchestratorV2,
+        onExecuteBrowserCommand = onExecuteBrowserCommand,
+        onSaveTurn = { userText, asstText ->
+            saveTurnToConversation(userText, asstText)
+        }
+    )
+
     private var sttManager: SpeechToTextManager? = null
     private var ttsManager: TextToSpeechManager? = null
 
+    private val assistantStore = AssistantStore(context)
     private var currentVoiceSettings = VoiceSettings()
     private var currentAppSettings = AppSettings()
     private var activeProvider: ProviderConfig? = null
@@ -148,65 +171,126 @@ class VoiceConversationOrchestrator(
         }
     }
 
+    private var startSessionJob: Job? = null
+
     fun startSession(provider: ProviderConfig?, assistant: Assistant?) {
-        MicrophoneOwnershipCoordinator.requestForVoiceSession()
-        activeProvider = provider
-        activeAssistant = assistant
-        retryCount = 0
+        startSessionJob?.cancel()
+        startSessionJob = orchestratorScope.launch {
+            activeProvider = provider
+            activeAssistant = assistant
+            retryCount = 0
 
-        _sessionState.update {
-            it.copy(
-                state = VoiceState.IDLE,
-                errorMessage = null,
-                partialUserText = "",
-                activeAssistantText = ""
-            )
-        }
+            val vs = voiceSettingsRepository.settings.first()
+            currentVoiceSettings = vs
 
-        // Seed existing conversation turns if starting from an existing conversation
-        val activeConvId = activeConversationIdProvider()
-        if (activeConvId != null && conversationStore != null) {
-            orchestratorScope.launch(Dispatchers.IO) {
-                val conv = conversationStore.snapshot().firstOrNull { it.id == activeConvId }
-                if (conv != null && conv.messages.isNotEmpty()) {
-                    val loadedTurns = mutableListOf<VoiceTurn>()
-                    var i = 0
-                    val msgs = conv.messages
-                    while (i < msgs.size) {
-                        val m = msgs[i]
-                        if (m.role == "user") {
-                            val next = msgs.getOrNull(i + 1)
-                            val asstText = if (next?.role == "assistant") next.content else ""
-                            loadedTurns.add(
-                                VoiceTurn(
-                                    userText = m.content,
-                                    assistantText = asstText,
-                                    isUserFinal = true,
-                                    isAssistantComplete = true,
-                                    timestamp = m.createdAt
+            _sessionState.update {
+                it.copy(
+                    state = VoiceState.IDLE,
+                    errorMessage = null,
+                    partialUserText = "",
+                    activeAssistantText = ""
+                )
+            }
+
+            // Seed existing conversation turns if starting from an existing conversation
+            val activeConvId = activeConversationIdProvider()
+            if (activeConvId != null && conversationStore != null) {
+                withContext(Dispatchers.IO) {
+                    val conv = conversationStore.snapshot().firstOrNull { it.id == activeConvId }
+                    if (conv != null && conv.messages.isNotEmpty()) {
+                        val loadedTurns = mutableListOf<VoiceTurn>()
+                        var i = 0
+                        val msgs = conv.messages
+                        while (i < msgs.size) {
+                            val m = msgs[i]
+                            if (m.role == "user") {
+                                val next = msgs.getOrNull(i + 1)
+                                val asstText = if (next?.role == "assistant") next.content else ""
+                                loadedTurns.add(
+                                    VoiceTurn(
+                                        userText = m.content,
+                                        assistantText = asstText,
+                                        isUserFinal = true,
+                                        isAssistantComplete = true,
+                                        timestamp = m.createdAt
+                                    )
                                 )
-                            )
-                            if (next?.role == "assistant") i += 2 else i += 1
-                        } else {
-                            i += 1
+                                if (next?.role == "assistant") i += 2 else i += 1
+                            } else {
+                                i += 1
+                            }
                         }
-                    }
-                    if (loadedTurns.isNotEmpty()) {
-                        _sessionState.update { it.copy(historyTurns = loadedTurns.takeLast(10)) }
+                        if (loadedTurns.isNotEmpty()) {
+                            _sessionState.update { it.copy(historyTurns = loadedTurns.takeLast(10)) }
+                        }
                     }
                 }
             }
-        }
 
-        // Initialize TTS and STT
-        ttsManager?.initialize(currentVoiceSettings) { isSuccess ->
-            _sessionState.update { it.copy(isTtsReady = isSuccess) }
-        }
-        sttManager?.initialize(currentVoiceSettings)
-        _sessionState.update { it.copy(isSttReady = true) }
+            if (vs.voiceEngine == com.lichiai.data.VoiceEngine.GEMINI_LIVE) {
+                val apiKey = com.lichiai.voice.live.GeminiKeyResolver.resolveApiKey(provider, internalProviderStore)
+                if (apiKey.isNullOrBlank()) {
+                    _sessionState.update {
+                        it.copy(
+                            state = VoiceState.ERROR,
+                            errorMessage = "No Gemini API key found. Please configure a Gemini provider in Settings."
+                        )
+                    }
+                    return@launch
+                }
 
-        // Begin listening
-        startListeningSafe()
+                val assistants = runCatching { assistantStore.snapshot() }.getOrDefault(emptyList())
+                val activeAsst = ActiveAssistantResolver.resolve(
+                    currentAppSettings.activeAssistantId,
+                    if (assistants.isNotEmpty()) assistants else (activeAssistant?.let { listOf(it) } ?: emptyList())
+                )
+
+                val memoryPack = runCatching {
+                    com.lichiai.memory.manager.MemoryContextGateway.retrieve(
+                        context = context,
+                        query = "Live Voice Session",
+                        conversationId = activeConvId
+                    )
+                }.getOrNull()
+                val memoryContextPrompt = memoryPack?.formattedPromptContext ?: ""
+
+                val semanticContext = com.lichiai.context.engine.UniversalContextContinuityEngine.getInstance().getContext(activeConvId ?: "default_session")
+                val contextFactPrompt = if (semanticContext.verifiedFacts.isNotEmpty()) {
+                    "CURRENT CONVERSATION CONTEXT & VERIFIED FACTS:\n" +
+                    semanticContext.verifiedFacts.entries.joinToString("\n") { "- ${it.key}: ${it.value}" } +
+                    (semanticContext.activeTopic?.let { "\nActive Topic: $it" } ?: "")
+                } else ""
+
+                val liveSystemPrompt = LichiPromptAssembler.assembleSystemPrompt(
+                    assistant = activeAsst,
+                    model = vs.geminiLiveModel,
+                    providerName = "Google Gemini Live",
+                    memoryContext = memoryContextPrompt,
+                    taskContext = contextFactPrompt,
+                    webContext = ""
+                )
+
+                geminiLiveEngine.startSession(
+                    apiKey = apiKey,
+                    model = vs.geminiLiveModel,
+                    voiceName = vs.geminiLiveVoice,
+                    systemInstruction = liveSystemPrompt
+                )
+                return@launch
+            }
+
+            MicrophoneOwnershipCoordinator.requestForVoiceSession()
+
+            // Initialize TTS and STT
+            ttsManager?.initialize(vs) { isSuccess ->
+                _sessionState.update { it.copy(isTtsReady = isSuccess) }
+            }
+            sttManager?.initialize(vs)
+            _sessionState.update { it.copy(isSttReady = true) }
+
+            // Begin listening
+            startListeningSafe()
+        }
     }
 
     fun setContextInfo(provider: ProviderConfig?, assistant: Assistant?) {
@@ -227,6 +311,10 @@ class VoiceConversationOrchestrator(
     }
 
     fun interruptAndStartListening() {
+        if (currentVoiceSettings.voiceEngine == com.lichiai.data.VoiceEngine.GEMINI_LIVE) {
+            geminiLiveEngine.interrupt()
+            return
+        }
         // Immediate Barge-In: Cancel TTS and LLM
         cancelLlmAndTts()
         _sessionState.update { it.copy(state = VoiceState.INTERRUPTED) }
@@ -237,6 +325,10 @@ class VoiceConversationOrchestrator(
     }
 
     fun toggleMute() {
+        if (currentVoiceSettings.voiceEngine == com.lichiai.data.VoiceEngine.GEMINI_LIVE) {
+            geminiLiveEngine.toggleMute()
+            return
+        }
         val newMute = !_sessionState.value.isMicMuted
         _sessionState.update { it.copy(isMicMuted = newMute) }
         if (newMute) {
@@ -255,6 +347,10 @@ class VoiceConversationOrchestrator(
     }
 
     fun stopSession() {
+        if (currentVoiceSettings.voiceEngine == com.lichiai.data.VoiceEngine.GEMINI_LIVE) {
+            geminiLiveEngine.stopSession()
+            return
+        }
         cancelLlmAndTts()
         restartRetryJob?.cancel()
         sttManager?.stopListening()
@@ -852,19 +948,7 @@ class VoiceConversationOrchestrator(
         }
 
         sentenceBuffer.clear()
-        val assistant = activeAssistant
         val defaultModel = provider.models.firstOrNull() ?: "gpt-4o-mini"
-        val modelToUse = currentAppSettings.activeModel.ifBlank { defaultModel }
-
-        val systemPrompt = PromptVars.render(
-            template = (assistant?.systemPrompt ?: currentAppSettings.systemPrompt).ifBlank {
-                "You are a helpful, conversational AI voice assistant. Keep answers natural, concise, and easy to speak aloud."
-            },
-            model = modelToUse,
-            provider = provider.name,
-            assistant = assistant?.name ?: "Assistant"
-        )
-
         val fullAssistantAccumulator = java.lang.StringBuilder()
 
         // If safe echo protection is on, pause STT during LLM/TTS
@@ -875,6 +959,17 @@ class VoiceConversationOrchestrator(
         llmStreamJob?.cancel()
         llmStreamJob = orchestratorScope.launch(Dispatchers.IO) {
             try {
+                val assistants = runCatching { assistantStore.snapshot() }.getOrDefault(emptyList())
+                val activeAsst = ActiveAssistantResolver.resolve(
+                    currentAppSettings.activeAssistantId,
+                    if (assistants.isNotEmpty()) assistants else (activeAssistant?.let { listOf(it) } ?: emptyList())
+                )
+                val modelToUse = activeAsst.preferredModel?.takeIf { it.isNotBlank() }
+                    ?: currentAppSettings.activeModel.ifBlank { defaultModel }
+
+                val effectiveVoiceSettings = currentAppSettings.copy(
+                    temperature = activeAsst.temperatureOverride ?: currentAppSettings.temperature
+                )
                 // Check if Web Search should be consulted
                 var webVoicePrompt = ""
                 val webSettings = webIntelligence.settingsRepository.getSnapshot()
@@ -892,32 +987,42 @@ class VoiceConversationOrchestrator(
                 }
 
                 val activeConvId = activeConversationIdProvider()
+                val memoryPack = runCatching {
+                    com.lichiai.memory.manager.MemoryContextGateway.retrieve(
+                        context = context,
+                        query = userQuery,
+                        conversationId = activeConvId
+                    )
+                }.getOrNull()
+                val memoryContextPrompt = memoryPack?.formattedPromptContext ?: ""
+
                 val semanticContext = com.lichiai.context.engine.UniversalContextContinuityEngine.getInstance().getContext(activeConvId ?: "default_session")
                 val contextFactPrompt = if (semanticContext.verifiedFacts.isNotEmpty()) {
-                    "\n\nCURRENT CONVERSATION CONTEXT & VERIFIED FACTS:\n" +
+                    "CURRENT CONVERSATION CONTEXT & VERIFIED FACTS:\n" +
                     semanticContext.verifiedFacts.entries.joinToString("\n") { "- ${it.key}: ${it.value}" } +
                     (semanticContext.activeTopic?.let { "\nActive Topic: $it" } ?: "")
                 } else ""
 
+                val effectiveSystemPrompt = LichiPromptAssembler.assembleSystemPrompt(
+                    assistant = activeAsst,
+                    model = modelToUse,
+                    providerName = provider.name,
+                    memoryContext = memoryContextPrompt,
+                    taskContext = contextFactPrompt,
+                    webContext = if (webVoicePrompt.isNotBlank()) {
+                        "$webVoicePrompt\n\nNOTE: You are in Voice Mode speaking to the user aloud. Give a concise, conversational answer summarizing the web facts. Do not recite URLs or reference brackets."
+                    } else ""
+                )
+
                 // Build message history with actual conversation context if available
                 val messages = mutableListOf<ChatMessage>()
-                val effectiveSystemPrompt = buildString {
-                    append(systemPrompt)
-                    if (contextFactPrompt.isNotBlank()) append(contextFactPrompt)
-                    if (webVoicePrompt.isNotBlank()) {
-                        append("\n\n$webVoicePrompt\n\nNOTE: You are in Voice Mode speaking to the user aloud. Give a concise, conversational answer summarizing the web facts. Do not recite URLs or reference brackets.")
-                    }
-                }
-
-                if (effectiveSystemPrompt.isNotBlank()) {
-                    messages.add(ChatMessage("system", effectiveSystemPrompt))
-                }
+                messages.add(ChatMessage("system", effectiveSystemPrompt))
                 val existingConv = if (activeConvId != null && conversationStore != null) {
                     conversationStore.snapshot().firstOrNull { it.id == activeConvId }
                 } else null
 
                 if (existingConv != null && existingConv.messages.isNotEmpty()) {
-                    existingConv.messages.filter { it.content.isNotBlank() }.takeLast(10).forEach { msg ->
+                    existingConv.messages.filter { it.content.isNotBlank() && it.role != "system" }.takeLast(10).forEach { msg ->
                         messages.add(ChatMessage(msg.role, msg.content))
                     }
                 } else {
@@ -935,9 +1040,27 @@ class VoiceConversationOrchestrator(
                         if (userQuery.isNotBlank() || assistantFinal.isNotBlank()) {
                             turnSaved = true
                             saveTurnToConversation(userText = userQuery, assistantText = assistantFinal)
-                            val activeConvId = activeConversationIdProvider() ?: "default_session"
+                            val resolvedConvId = activeConvId ?: "default_session"
+                            runCatching {
+                                com.lichiai.memory.manager.MemoryContextGateway.recordTurn(
+                                    context = context,
+                                    conversationId = resolvedConvId,
+                                    messageId = "voice_${System.currentTimeMillis()}",
+                                    role = "user",
+                                    content = userQuery
+                                )
+                                if (assistantFinal.isNotBlank()) {
+                                    com.lichiai.memory.manager.MemoryContextGateway.recordTurnAsync(
+                                        context = context,
+                                        conversationId = resolvedConvId,
+                                        messageId = "voice_${System.currentTimeMillis() + 1}",
+                                        role = "assistant",
+                                        content = assistantFinal
+                                    )
+                                }
+                            }
                             com.lichiai.context.engine.UniversalContextContinuityEngine.getInstance().recordExecution(
-                                conversationId = activeConvId,
+                                conversationId = resolvedConvId,
                                 capability = com.lichiai.intent.model.LichiCapability.CHAT,
                                 userGoal = userQuery,
                                 assistantResponse = assistantFinal
@@ -949,7 +1072,7 @@ class VoiceConversationOrchestrator(
                 try {
                     val streamFlow = llmClient.chatStream(
                         provider = provider,
-                        settings = currentAppSettings,
+                        settings = effectiveVoiceSettings,
                         modelId = modelToUse,
                         messages = messages
                     )

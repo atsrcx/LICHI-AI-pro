@@ -3,6 +3,7 @@ package com.lichiai.browser.engine
 import android.annotation.SuppressLint
 import android.content.Context
 import android.graphics.Bitmap
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
 import android.webkit.GeolocationPermissions
 import android.webkit.PermissionRequest
@@ -10,6 +11,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
@@ -17,6 +19,7 @@ import com.lichiai.browser.api.ScrollDirection
 import com.lichiai.browser.context.BrowserPageCandidate
 import com.lichiai.browser.events.BrowserEvent
 import com.lichiai.browser.events.BrowserEventBus
+import com.lichiai.browser.inspection.BrowserInstrumentationHub
 import com.lichiai.browser.permissions.BrowserPermissionManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -33,7 +36,8 @@ class ChromiumWebViewEngine(
     val context: Context,
     private val eventBus: BrowserEventBus,
     private val permissionManager: BrowserPermissionManager,
-    val isIncognito: Boolean = false
+    val isIncognito: Boolean = false,
+    val instrumentationHub: BrowserInstrumentationHub? = null
 ) : BrowserEngine {
 
     val webView: WebView = WebView(context).apply {
@@ -80,9 +84,21 @@ class ChromiumWebViewEngine(
                     permissionManager.handleGeolocationPrompt(origin, callback)
                 }
             }
+
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage?): Boolean {
+                if (consoleMessage != null) {
+                    instrumentationHub?.onConsoleMessage(consoleMessage)
+                }
+                return super.onConsoleMessage(consoleMessage)
+            }
         }
 
         webViewClient = object : WebViewClient() {
+            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                instrumentationHub?.onInterceptRequest(view, request)
+                return super.shouldInterceptRequest(view, request)
+            }
+
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
                 val url = request?.url?.toString() ?: return false
                 if (url.startsWith("http://") || url.startsWith("https://") || url.startsWith("about:blank")) {
@@ -101,6 +117,7 @@ class ChromiumWebViewEngine(
             override fun onPageStarted(view: WebView?, url: String?, favicon: Bitmap?) {
                 val targetUrl = url ?: view?.url ?: ""
                 if (targetUrl.isNotBlank()) {
+                    instrumentationHub?.onPageStarted(targetUrl)
                     eventBus.emit(BrowserEvent.NavigationStarted(targetUrl))
                 }
             }
@@ -108,6 +125,7 @@ class ChromiumWebViewEngine(
             override fun onPageFinished(view: WebView?, url: String?) {
                 val u = url ?: view?.url ?: ""
                 val t = view?.title ?: ""
+                instrumentationHub?.onPageFinished(this@ChromiumWebViewEngine, u)
                 eventBus.emit(BrowserEvent.PageLoaded(u, t))
             }
 
@@ -121,6 +139,10 @@ class ChromiumWebViewEngine(
                 }
             }
         }
+    }
+
+    init {
+        instrumentationHub?.attachToEngine(this)
     }
 
     override fun loadUrl(url: String) {
@@ -157,9 +179,43 @@ class ChromiumWebViewEngine(
 
     override fun canGoForward(): Boolean = webView.canGoForward()
 
-    override fun getUrl(): String = webView.url ?: "about:blank"
+    override fun getUrl(): String {
+        return if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            try { webView.url ?: "about:blank" } catch (_: Exception) { "about:blank" }
+        } else {
+            try {
+                var res = "about:blank"
+                val latch = java.util.concurrent.CountDownLatch(1)
+                webView.post {
+                    try { res = webView.url ?: "about:blank" } catch (_: Exception) {}
+                    latch.countDown()
+                }
+                latch.await(300, java.util.concurrent.TimeUnit.MILLISECONDS)
+                res
+            } catch (_: Exception) {
+                "about:blank"
+            }
+        }
+    }
 
-    override fun getTitle(): String = webView.title ?: ""
+    override fun getTitle(): String {
+        return if (android.os.Looper.myLooper() == android.os.Looper.getMainLooper()) {
+            try { webView.title ?: "" } catch (_: Exception) { "" }
+        } else {
+            try {
+                var res = ""
+                val latch = java.util.concurrent.CountDownLatch(1)
+                webView.post {
+                    try { res = webView.title ?: "" } catch (_: Exception) {}
+                    latch.countDown()
+                }
+                latch.await(300, java.util.concurrent.TimeUnit.MILLISECONDS)
+                res
+            } catch (_: Exception) {
+                ""
+            }
+        }
+    }
 
     override fun evaluateJavascript(script: String, callback: ((String) -> Unit)?) {
         webView.post {

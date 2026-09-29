@@ -150,6 +150,43 @@ class BrowserToolRegistry(private val capabilityApi: BrowserCapabilityAPI) {
             name = "stopTask",
             description = "Stop active agent execution and return control to user.",
             parameters = emptyList()
+        ),
+        BrowserToolDefinition(
+            name = "inspectPage",
+            description = "Deeply inspect active webpage (DOM, endpoints, network, resources, security, performance, errors).",
+            parameters = listOf(
+                BrowserToolParam("mode", "string", "Optional inspection mode: FULL_INSPECTION, ENDPOINT_INSPECTION, NETWORK_INSPECTION, SECURITY_INSPECTION", required = false)
+            )
+        ),
+        BrowserToolDefinition(
+            name = "discoverEndpoints",
+            description = "Identify all observed API endpoints on the active website with methods, paths, and parameters.",
+            parameters = emptyList()
+        ),
+        BrowserToolDefinition(
+            name = "discoverDownloads",
+            description = "Extract direct download links (.apk, .pdf, .zip, etc.) on the current page.",
+            parameters = emptyList()
+        ),
+        BrowserToolDefinition(
+            name = "discoverResources",
+            description = "List all loaded resources, scripts, stylesheets, and external connected domains.",
+            parameters = emptyList()
+        ),
+        BrowserToolDefinition(
+            name = "discoverLinks",
+            description = "Extract and categorize all links on the current page (internal, external, downloads, APIs).",
+            parameters = emptyList()
+        ),
+        BrowserToolDefinition(
+            name = "analyzeNetwork",
+            description = "Analyze all network requests, latency timeline, status codes, and third-party servers.",
+            parameters = emptyList()
+        ),
+        BrowserToolDefinition(
+            name = "explainTechnicalStructure",
+            description = "Provide an in-depth technical and architectural explanation of the website.",
+            parameters = emptyList()
         )
     )
 
@@ -276,6 +313,113 @@ class BrowserToolRegistry(private val capabilityApi: BrowserCapabilityAPI) {
                 "stopTask" -> {
                     capabilityApi.stopTask()
                     "SUCCESS: Task stopped"
+                }
+                "inspectPage" -> {
+                    val controller = capabilityApi as? com.lichiai.browser.BrowserController
+                        ?: return "ERROR: BrowserController not available for inspection"
+                    val modeStr = args["mode"]
+                    val mode = com.lichiai.browser.inspection.model.InspectionMode.fromString(modeStr)
+                    val report = controller.inspectCurrentPage(mode = mode)
+                    buildString {
+                        append("=== PAGE INSPECTION REPORT ===\n")
+                        append("URL: ${report.session.targetUrl}\n")
+                        append("Title: ${report.session.pageTitle}\n")
+                        append("Summary: ${report.summary.totalRequests} requests, ${report.summary.totalEndpointsDiscovered} APIs, ${report.summary.totalDownloadsDetected} downloads, ${report.summary.totalFormsDetected} forms, ${report.summary.totalErrorsCount} errors\n")
+                        append("HTTPS: ${report.summary.isHttps} | Mixed Content: ${report.summary.hasMixedContent}\n")
+                        append("Load Time: ${report.summary.fullLoadTimeMs}ms\n\n")
+                        if (report.findings.isNotEmpty()) {
+                            append("Key Findings:\n")
+                            report.findings.forEach { f ->
+                                append("• [${f.category}] ${f.title}: ${f.description}\n")
+                            }
+                        }
+                    }
+                }
+                "discoverEndpoints" -> {
+                    val controller = capabilityApi as? com.lichiai.browser.BrowserController
+                        ?: return "ERROR: BrowserController not available"
+                    val eps = controller.discoverEndpoints()
+                    if (eps.isEmpty()) "No asynchronous API endpoints observed yet."
+                    else {
+                        buildString {
+                            append("Discovered ${eps.size} API endpoints:\n")
+                            eps.forEachIndexed { i, ep ->
+                                append("${i + 1}. [${ep.method}] ${ep.path} (Domain: ${ep.domain}, Category: ${ep.category}, Status: ${ep.responseStatusCode})\n")
+                                if (ep.parameters.isNotEmpty()) {
+                                    append("   Parameters: " + ep.parameters.joinToString(", ") { "${it.name}=${it.sampleValue}" } + "\n")
+                                }
+                            }
+                        }
+                    }
+                }
+                "discoverDownloads" -> {
+                    val controller = capabilityApi as? com.lichiai.browser.BrowserController
+                        ?: return "ERROR: BrowserController not available"
+                    val dls = controller.discoverDownloads()
+                    if (dls.isEmpty()) "No direct download links identified on page."
+                    else {
+                        buildString {
+                            append("Found ${dls.size} downloadable files:\n")
+                            dls.forEachIndexed { i, dl ->
+                                append("${i + 1}. ${dl.filename} (.${dl.extension})\n   URL: ${dl.url}\n   Source: ${dl.detectedVia}\n")
+                            }
+                        }
+                    }
+                }
+                "discoverResources" -> {
+                    val controller = capabilityApi as? com.lichiai.browser.BrowserController
+                        ?: return "ERROR: BrowserController not available"
+                    val res = controller.discoverResources()
+                    buildString {
+                        append("Discovered ${res.size} resources:\n")
+                        val byType = res.groupBy { it.type }
+                        byType.forEach { (type, list) ->
+                            append("\n[$type] (${list.size} items):\n")
+                            list.take(6).forEach { r ->
+                                append("• ${r.domain} - ${r.url.take(80)}\n")
+                            }
+                        }
+                    }
+                }
+                "discoverLinks" -> {
+                    val controller = capabilityApi as? com.lichiai.browser.BrowserController
+                        ?: return "ERROR: BrowserController not available"
+                    val links = controller.discoverLinks()
+                    if (links.isEmpty()) "No links found."
+                    else {
+                        buildString {
+                            append("Discovered ${links.size} links on page:\n")
+                            val byCat = links.groupBy { it.category }
+                            byCat.forEach { (cat, list) ->
+                                append("\n=== Category: $cat (${list.size}) ===\n")
+                                list.take(10).forEach { l ->
+                                    append("• \"${l.text}\" -> ${l.url}\n")
+                                }
+                            }
+                        }
+                    }
+                }
+                "analyzeNetwork" -> {
+                    val controller = capabilityApi as? com.lichiai.browser.BrowserController
+                        ?: return "ERROR: BrowserController not available"
+                    val analysis = controller.analyzeNetwork()
+                    buildString {
+                        append("=== NETWORK ANALYSIS ===\n")
+                        append("Total Requests: ${analysis.totalRequests}\n")
+                        append("Failed (4xx/5xx/Error): ${analysis.timeline.totalFailed}\n")
+                        append("Slow (>1s): ${analysis.timeline.totalSlowRequests}\n")
+                        append("Average Latency: ${analysis.timeline.averageLatencyMs}ms\n\n")
+                        append("Top Connected Domains:\n")
+                        analysis.topDomains.forEach { (domain, count) ->
+                            append("• $domain: $count requests\n")
+                        }
+                    }
+                }
+                "explainTechnicalStructure" -> {
+                    val controller = capabilityApi as? com.lichiai.browser.BrowserController
+                        ?: return "ERROR: BrowserController not available"
+                    val report = controller.inspectCurrentPage(com.lichiai.browser.inspection.model.InspectionMode.FULL_INSPECTION)
+                    report.technicalStructureExplanation
                 }
                 else -> "ERROR: Unknown browser tool '$name'"
             }

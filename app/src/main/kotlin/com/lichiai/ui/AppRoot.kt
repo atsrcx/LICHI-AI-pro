@@ -82,7 +82,7 @@ fun AppRoot(vm: ChatViewModel) {
         screen = Screen.Chat
     }
     androidx.activity.compose.BackHandler(enabled = screen == Screen.VoiceSettings) {
-        screen = Screen.Voice
+        screen = Screen.Settings
     }
     androidx.activity.compose.BackHandler(enabled = screen == Screen.HandleMyCalls) {
         screen = Screen.Settings
@@ -343,7 +343,7 @@ fun AppRoot(vm: ChatViewModel) {
                 )
             }
             Screen.Voice -> {
-                val activeAssistant = assistants.firstOrNull { it.id == settings.activeAssistantId }
+                val activeAssistant = com.lichiai.assistant.resolver.ActiveAssistantResolver.resolve(settings.activeAssistantId, assistants).toAssistant()
                 VoiceConversationScreen(
                     orchestrator = vm.voiceOrchestrator,
                     activeProvider = activeProvider,

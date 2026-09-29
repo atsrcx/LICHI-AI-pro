@@ -143,8 +143,10 @@ class SystemAssistantBridge private constructor(context: Context) {
                 val activeProvider = providers.firstOrNull { it.id == appSettings.activeProviderId }
                     ?: providers.firstOrNull()
 
-                val activeAssistant = assistants.firstOrNull { it.id == appSettings.activeAssistantId }
-                    ?: assistants.firstOrNull()
+                val activeAssistant = com.lichiai.assistant.resolver.ActiveAssistantResolver.resolve(
+                    appSettings.activeAssistantId,
+                    assistants
+                ).toAssistant()
 
                 voiceOrchestrator.startSession(
                     provider = activeProvider,

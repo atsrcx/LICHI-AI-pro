@@ -7,7 +7,11 @@ import com.lichiai.api.ChatMessage
 import com.lichiai.api.LlmClient
 import com.lichiai.data.AppSettings
 import com.lichiai.data.Assistant
+import com.lichiai.data.AssistantPresets
 import com.lichiai.data.AssistantStore
+import com.lichiai.assistant.model.ActiveAssistant
+import com.lichiai.assistant.resolver.ActiveAssistantResolver
+import com.lichiai.prompt.LichiPromptAssembler
 import com.lichiai.data.Conversation
 import com.lichiai.data.ConversationStore
 import com.lichiai.data.Message
@@ -62,6 +66,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     val reminderManager = com.lichiai.time.manager.ReminderManager(app)
     val timeCapabilityAdapter = com.lichiai.time.adapter.TimeCapabilityAdapter(app)
     val terminalManager = com.lichiai.terminal.core.TerminalManager.getInstance(app)
+    val memoryEngine = com.lichiai.memory.manager.LichiMemoryEngine.getInstance(app)
 
     private val _browserNavigationEvent = MutableSharedFlow<Unit>(extraBufferCapacity = 4)
     val browserNavigationEvent: SharedFlow<Unit> = _browserNavigationEvent.asSharedFlow()
@@ -137,7 +142,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         },
         universalIntentEngine = universalIntentEngine,
         routeDispatcher = routeDispatcher,
-        taskOrchestratorV2 = taskOrchestratorV2
+        taskOrchestratorV2 = taskOrchestratorV2,
+        providerStore = providerStore
     )
 
     val wakeWordManager = com.lichiai.voice.wakeword.WakeWordManager(
@@ -310,8 +316,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     fun activeProvider(): ProviderConfig? =
         providers.value.firstOrNull { it.id == settings.value.activeProviderId }
 
+    fun activeAssistantProfile(): ActiveAssistant =
+        ActiveAssistantResolver.resolve(settings.value.activeAssistantId, assistants.value)
+
     fun activeAssistant(): Assistant? =
-        assistants.value.firstOrNull { it.id == settings.value.activeAssistantId }
+        activeAssistantProfile().toAssistant()
 
     fun selectModel(providerId: String, model: String) {
         viewModelScope.launch {
@@ -497,13 +506,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
 
         val current = settings.value
-        val assistant = activeAssistant()
+        val asstSnapshot = assistants.value.ifEmpty { AssistantPresets.defaults() }
+        val activeAsstProfile = ActiveAssistantResolver.resolve(current.activeAssistantId, asstSnapshot)
+        val assistant = activeAsstProfile.toAssistant()
 
         // Resolve effective provider and model: assistant override > settings active
-        val provider = assistant?.preferredProviderId
+        val provider = activeAsstProfile.preferredProviderId
             ?.let { id -> providers.value.firstOrNull { it.id == id } }
             ?: activeProvider()
-        val model = assistant?.preferredModel?.takeIf { it.isNotBlank() }
+        val model = activeAsstProfile.preferredModel?.takeIf { it.isNotBlank() }
             ?: current.activeModel
 
         val orchMode = runCatching {
@@ -535,6 +546,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             store.upsert(initialConv)
+            runCatching { memoryEngine.recordTurn(conversationId = activeId, messageId = userMsgId, role = "user", content = trimmed) }
 
             var webSearchOverridePrompt = ""
 
@@ -921,6 +933,26 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     is com.lichiai.intent.model.ResolvedIntent.NormalChat -> {
                         // Proceed to normal conversation flow
                     }
+
+                    else -> {
+                        val outcome = routeDispatcher.dispatch(resIntent)
+                        val outcomeMsg = when (outcome) {
+                            is com.lichiai.intent.dispatcher.DispatchExecutionResult.WebSearchExecuted -> {
+                                webSearchOverridePrompt = outcome.contextPrompt
+                                outcome.message
+                            }
+                            is com.lichiai.intent.dispatcher.DispatchExecutionResult.BrowserExecuted -> {
+                                _browserNavigationEvent.emit(Unit)
+                                outcome.message
+                            }
+                            is com.lichiai.intent.dispatcher.DispatchExecutionResult.ExecutionFailed -> "⚠️ ${outcome.error}"
+                            else -> resIntent.naturalAcknowledgment
+                        }
+                        if (webSearchOverridePrompt.isNullOrBlank()) {
+                            updateAssistantMessage(activeId, assistantMsgId, content = outcomeMsg)
+                            return@launch
+                        }
+                    }
                 }
             }
 
@@ -945,16 +977,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 return@launch
             }
 
-            val temperature = assistant?.temperature ?: current.temperature
-
-            val systemPromptRaw = assistant?.systemPrompt?.takeIf { it.isNotBlank() }
-                ?: current.systemPrompt
-            val systemPrompt = PromptVars.render(
-                template = systemPromptRaw,
-                model = model,
-                provider = provider.name,
-                assistant = assistant?.name ?: ""
-            )
+            val temperature = activeAsstProfile.temperatureOverride ?: current.temperature
 
             // Check Web Search Intent & Retrieve Real-time Data
             var webContextPrompt = webSearchOverridePrompt
@@ -986,9 +1009,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val historyForApi = mutableListOf<ChatMessage>()
-            val effectiveSystemPrompt = if (webContextPrompt.isNotBlank()) {
-                if (systemPrompt.isNotBlank()) "$systemPrompt\n\n$webContextPrompt" else webContextPrompt
-            } else systemPrompt
+            val memoryPack = runCatching { memoryEngine.getMemoryPack(trimmed, activeId) }.getOrNull()
+            val memoryContext = memoryPack?.formattedPromptContext ?: ""
+            val effectiveSystemPrompt = LichiPromptAssembler.assembleSystemPrompt(
+                assistant = activeAsstProfile,
+                model = model,
+                providerName = provider.name,
+                memoryContext = memoryContext,
+                webContext = webContextPrompt
+            )
 
             if (effectiveSystemPrompt.isNotBlank()) {
                 historyForApi.add(ChatMessage("system", effectiveSystemPrompt))
@@ -996,7 +1025,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
             val convSnapshot = store.snapshot().firstOrNull { it.id == activeId }
             convSnapshot?.messages
-                ?.filter { !(it.role == "assistant" && it.content.isEmpty()) }
+                ?.filter { it.role != "system" && !(it.role == "assistant" && it.content.isEmpty()) }
                 ?.forEach { msg ->
                     val imgs = msg.attachments.filter { it.type == "image" }
                     if (msg.role == "user" && imgs.isNotEmpty()) {
@@ -1073,8 +1102,20 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 try {
                     client.chatStream(provider, effectiveSettings, model, historyForApi)
                         .catch { e ->
-                            _error.value = e.message ?: "Request failed"
-                            val finalContent = if (builder.isEmpty()) "(error: ${e.message})" else builder.toString()
+                            val rawMsg = e.message ?: "Request failed"
+                            val userFriendlyMsg = when {
+                                rawMsg.contains("429") || rawMsg.contains("RESOURCE_EXHAUSTED", ignoreCase = true) || rawMsg.contains("quota", ignoreCase = true) ->
+                                    "⚠️ Rate limit / API quota exceeded for ${provider.name}. Please check your quota or switch to another provider/model in Settings."
+                                rawMsg.contains("503") || rawMsg.contains("overloaded", ignoreCase = true) || rawMsg.contains("UNAVAILABLE", ignoreCase = true) ->
+                                    "⚠️ The AI model is temporarily overloaded (HTTP 503). Please wait a moment and try again."
+                                rawMsg.contains("401") || rawMsg.contains("403") || rawMsg.contains("unauthorized", ignoreCase = true) ->
+                                    "⚠️ Authentication failed: Invalid API key for ${provider.name}. Please update it in Settings."
+                                rawMsg.contains("SocketTimeoutException", ignoreCase = true) || rawMsg.contains("timeout", ignoreCase = true) ->
+                                    "⚠️ Request timed out while connecting to ${provider.name}. Please check your internet connection."
+                                else -> "⚠️ Request failed: $rawMsg"
+                            }
+                            _error.value = userFriendlyMsg
+                            val finalContent = if (builder.isEmpty()) userFriendlyMsg else "${builder.toString()}\n\n$userFriendlyMsg"
                             updateAssistantMessage(activeId, assistantMsgId, content = finalContent)
                         }
                         .collect { delta ->
@@ -1108,6 +1149,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (finalContent.isNotEmpty()) {
                         _streamingOverlay.value = assistantMsgId to finalContent
                         updateAssistantMessage(activeId, assistantMsgId, content = finalContent, taskActivity = completedActivity)
+                        memoryEngine.recordTurnAsync(conversationId = activeId, messageId = assistantMsgId, role = "assistant", content = finalContent)
                         intentContextBuilder.recordExecution(
                             capability = com.lichiai.intent.model.LichiCapability.CHAT,
                             userGoal = trimmed,
