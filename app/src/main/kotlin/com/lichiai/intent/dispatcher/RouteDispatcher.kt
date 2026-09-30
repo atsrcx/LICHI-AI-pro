@@ -17,7 +17,12 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 sealed class DispatchExecutionResult {
-    data class BrowserExecuted(val message: String) : DispatchExecutionResult()
+    data class BrowserExecuted(
+        val message: String,
+        val isSuccess: Boolean = true,
+        val extractedAnswer: String? = null,
+        val extractedContext: String? = null
+    ) : DispatchExecutionResult()
     data class WebSearchExecuted(val response: WebSearchResponse, val contextPrompt: String, val message: String) : DispatchExecutionResult()
     data class AndroidAgentExecuted(val summary: String, val isSuccess: Boolean, val steps: Int) : DispatchExecutionResult()
     data class CallExecuted(val message: String, val isSuccess: Boolean) : DispatchExecutionResult()
@@ -31,7 +36,9 @@ sealed class DispatchExecutionResult {
 }
 
 /**
- * Dispatches resolved intents to the appropriate isolated peer capability.
+ * Execution Dispatcher for Lichi AI.
+ * ARCHITECTURAL INVARIANT: RouteDispatcher is an execution dispatcher and does NOT classify raw user language.
+ * It strictly dispatches structured requests (ResolvedIntent) to verified isolated peer capability executors.
  */
 class RouteDispatcher(
     private val context: Context,
@@ -54,7 +61,7 @@ class RouteDispatcher(
         onProgress: ((step: Int, total: Int, text: String) -> Unit)? = null
     ): DispatchExecutionResult = withContext(Dispatchers.Main) {
         when (intent) {
-            is ResolvedIntent.BrowserTask -> executeBrowserTask(intent)
+            is ResolvedIntent.BrowserTask -> executeBrowserTask(intent, onProgress)
             is ResolvedIntent.WebSearchTask -> executeWebSearchTask(intent)
             is ResolvedIntent.DorkSearchTask -> executeDorkSearchTask(intent)
             is ResolvedIntent.SiteSearchTask -> executeSiteSearchTask(intent)
@@ -91,76 +98,104 @@ class RouteDispatcher(
         }
     }
 
-    private suspend fun executeBrowserTask(task: ResolvedIntent.BrowserTask): DispatchExecutionResult {
+    private suspend fun executeBrowserTask(
+        task: ResolvedIntent.BrowserTask,
+        onProgress: ((step: Int, total: Int, text: String) -> Unit)? = null
+    ): DispatchExecutionResult {
         onNavigateToBrowser()
 
         return when (task.action) {
             BrowserActionType.SEARCH -> {
-                val query = task.query ?: ""
-                browserController.search(query, task.searchEngine)
+                val query = task.query?.takeIf { it.isNotBlank() } ?: task.rawPrompt
+                val agentRes = browserController.agent.executeInstruction(query) { s, t, txt ->
+                    onProgress?.invoke(s, t, txt)
+                }
+                val summary = agentRes.answer ?: agentRes.summary
                 contextBuilder.recordExecution(
                     capability = LichiCapability.BROWSER,
                     userGoal = task.rawPrompt,
-                    assistantResponse = task.naturalAcknowledgment,
+                    assistantResponse = summary,
                     searchQuery = query,
                     actionType = "BROWSER_SEARCH"
                 )
-                DispatchExecutionResult.BrowserExecuted(task.naturalAcknowledgment)
+                DispatchExecutionResult.BrowserExecuted(
+                    message = summary,
+                    isSuccess = agentRes.isSuccess,
+                    extractedAnswer = agentRes.answer,
+                    extractedContext = agentRes.extractedContext
+                )
             }
             BrowserActionType.NAVIGATE -> {
                 val url = task.url ?: "https://www.google.com"
-                browserController.navigate(url)
+                val ok = browserController.navigate(url)
+                val summary = "Navigated to $url"
                 contextBuilder.recordExecution(
                     capability = LichiCapability.BROWSER,
                     userGoal = task.rawPrompt,
-                    assistantResponse = task.naturalAcknowledgment,
+                    assistantResponse = summary,
                     actionType = "BROWSER_NAVIGATE"
                 )
-                DispatchExecutionResult.BrowserExecuted(task.naturalAcknowledgment)
+                DispatchExecutionResult.BrowserExecuted(summary, isSuccess = ok)
             }
             BrowserActionType.CLICK_CANDIDATE -> {
                 val instruction = task.rawPrompt.ifBlank { "click candidate ${task.candidateIndex ?: 0}" }
-                browserController.agent.submitInstruction(instruction)
+                val agentRes = browserController.agent.executeInstruction(instruction) { s, t, txt ->
+                    onProgress?.invoke(s, t, txt)
+                }
+                val summary = agentRes.answer ?: agentRes.summary
                 contextBuilder.recordExecution(
                     capability = LichiCapability.BROWSER,
                     userGoal = task.rawPrompt,
-                    assistantResponse = task.naturalAcknowledgment,
+                    assistantResponse = summary,
                     actionType = "BROWSER_CLICK"
                 )
-                DispatchExecutionResult.BrowserExecuted(task.naturalAcknowledgment)
+                DispatchExecutionResult.BrowserExecuted(
+                    message = summary,
+                    isSuccess = agentRes.isSuccess,
+                    extractedAnswer = agentRes.answer,
+                    extractedContext = agentRes.extractedContext
+                )
             }
             BrowserActionType.SCROLL_DOWN -> {
-                browserController.scroll(ScrollDirection.DOWN)
-                DispatchExecutionResult.BrowserExecuted("Scrolled down.")
+                val ok = browserController.scroll(ScrollDirection.DOWN)
+                DispatchExecutionResult.BrowserExecuted("Scrolled down.", isSuccess = ok)
             }
             BrowserActionType.SCROLL_UP -> {
-                browserController.scroll(ScrollDirection.UP)
-                DispatchExecutionResult.BrowserExecuted("Scrolled up.")
+                val ok = browserController.scroll(ScrollDirection.UP)
+                DispatchExecutionResult.BrowserExecuted("Scrolled up.", isSuccess = ok)
             }
             BrowserActionType.BACK -> {
-                browserController.goBack()
-                DispatchExecutionResult.BrowserExecuted("Navigated back.")
+                val ok = browserController.goBack()
+                DispatchExecutionResult.BrowserExecuted("Navigated back.", isSuccess = ok)
             }
             BrowserActionType.FORWARD -> {
-                browserController.goForward()
-                DispatchExecutionResult.BrowserExecuted("Navigated forward.")
+                val ok = browserController.goForward()
+                DispatchExecutionResult.BrowserExecuted("Navigated forward.", isSuccess = ok)
             }
             BrowserActionType.RELOAD -> {
-                browserController.reload()
-                DispatchExecutionResult.BrowserExecuted("Page reloaded.")
+                val ok = browserController.reload()
+                DispatchExecutionResult.BrowserExecuted("Page reloaded.", isSuccess = ok)
             }
             BrowserActionType.NEW_TAB -> {
                 browserController.tabManager.createTab()
-                DispatchExecutionResult.BrowserExecuted("New tab opened.")
+                DispatchExecutionResult.BrowserExecuted("New tab opened.", isSuccess = true)
             }
             BrowserActionType.CLOSE_TAB -> {
-                browserController.closeTab(browserController.tabManager.activeTabId.value)
-                DispatchExecutionResult.BrowserExecuted("Tab closed.")
+                val ok = browserController.closeTab(browserController.tabManager.activeTabId.value)
+                DispatchExecutionResult.BrowserExecuted("Tab closed.", isSuccess = ok)
             }
             BrowserActionType.FIND_ON_PAGE -> {
                 val instruction = task.findTarget?.let { "find on page $it" } ?: task.rawPrompt
-                browserController.agent.submitInstruction(instruction)
-                DispatchExecutionResult.BrowserExecuted(task.naturalAcknowledgment)
+                val agentRes = browserController.agent.executeInstruction(instruction) { s, t, txt ->
+                    onProgress?.invoke(s, t, txt)
+                }
+                val summary = agentRes.answer ?: agentRes.summary
+                DispatchExecutionResult.BrowserExecuted(
+                    message = summary,
+                    isSuccess = agentRes.isSuccess,
+                    extractedAnswer = agentRes.answer,
+                    extractedContext = agentRes.extractedContext
+                )
             }
         }
     }
@@ -173,15 +208,20 @@ class RouteDispatcher(
                 isNewsSearch = task.isNewsSearch
             )
             val contextPrompt = webIntelligenceManager.buildWebContextPrompt(response)
+            val summary = response.directAnswer ?: if (response.results.isNotEmpty()) {
+                "Found ${response.results.size} search results for \"${task.query}\"."
+            } else {
+                "Search completed with no direct results."
+            }
             contextBuilder.recordExecution(
                 capability = LichiCapability.WEB_SEARCH,
                 userGoal = task.query,
-                assistantResponse = task.naturalAcknowledgment,
+                assistantResponse = summary,
                 searchQuery = task.query,
                 results = response.results.map { it.title },
                 actionType = "WEB_SEARCH"
             )
-            DispatchExecutionResult.WebSearchExecuted(response, contextPrompt, task.naturalAcknowledgment)
+            DispatchExecutionResult.WebSearchExecuted(response, contextPrompt, summary)
         } catch (e: Exception) {
             DispatchExecutionResult.ExecutionFailed("Web search failed: ${e.message}")
         }
@@ -191,15 +231,16 @@ class RouteDispatcher(
         try {
             val response = browserPlatform.executeDorkSearch(task.query)
             val contextPrompt = webIntelligenceManager.buildWebContextPrompt(response)
+            val summary = response.directAnswer ?: "Dork search completed with ${response.results.size} results."
             contextBuilder.recordExecution(
                 capability = LichiCapability.DORK_SEARCH,
                 userGoal = task.query,
-                assistantResponse = task.naturalAcknowledgment,
+                assistantResponse = summary,
                 searchQuery = task.query,
                 results = response.results.map { it.title },
                 actionType = "DORK_SEARCH"
             )
-            DispatchExecutionResult.WebSearchExecuted(response, contextPrompt, task.naturalAcknowledgment)
+            DispatchExecutionResult.WebSearchExecuted(response, contextPrompt, summary)
         } catch (e: Exception) {
             DispatchExecutionResult.ExecutionFailed("Dork search failed: ${e.message}")
         }
@@ -650,7 +691,20 @@ class RouteDispatcher(
 
     private suspend fun executeTimeReminderTask(task: ResolvedIntent.TimeReminderTask): DispatchExecutionResult {
         val adapter = com.lichiai.time.adapter.TimeCapabilityAdapter(context)
-        val outcome = adapter.handleQuery(task.rawInput)
+        val outcome = if (task.action.isNotBlank() && (task.title != null || task.timeMs != null || task.action != "CREATE")) {
+            adapter.executeStructured(
+                action = task.action,
+                title = task.title,
+                timeMs = task.timeMs,
+                isAlarm = task.isAlarm,
+                recurrenceRule = task.recurrence,
+                idOrQuery = task.id ?: task.title ?: task.rawInput,
+                snoozeMinutes = task.minutes,
+                rawInput = task.rawInput
+            )
+        } else {
+            adapter.handleQuery(task.rawInput)
+        }
         contextBuilder.recordExecution(
             capability = LichiCapability.TIME_REMINDER,
             userGoal = task.rawInput,

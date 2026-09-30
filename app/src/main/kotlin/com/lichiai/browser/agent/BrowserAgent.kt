@@ -40,6 +40,15 @@ data class BrowserAgentTelemetry(
     val lastAction: String = ""
 )
 
+data class BrowserExecutionResult(
+    val isSuccess: Boolean,
+    val answer: String? = null,
+    val summary: String = "",
+    val extractedContext: String? = null,
+    val finalUrl: String = "",
+    val pageTitle: String = ""
+)
+
 /**
  * Autonomous, LLM-Native Browser Agent.
  * Uses the configured Browser LLM as the single reasoning engine for:
@@ -103,11 +112,25 @@ class BrowserAgent(
     }
 
     /**
-     * Submit natural language instruction or # shortcut to the Browser Agent.
+     * Submit natural language instruction or # shortcut asynchronously to the Browser Agent.
      */
     fun submitInstruction(instruction: String, onResult: ((String) -> Unit)? = null) {
+        currentTaskJob?.cancel()
+        currentTaskJob = scope.launch(Dispatchers.Default) {
+            val res = executeInstruction(instruction)
+            onResult?.invoke(res.answer ?: res.summary)
+        }
+    }
+
+    /**
+     * Synchronously/suspendingly executes an instruction with full lifecycle, progress, and result contract.
+     */
+    suspend fun executeInstruction(
+        instruction: String,
+        onProgress: ((step: Int, total: Int, text: String) -> Unit)? = null
+    ): BrowserExecutionResult = kotlinx.coroutines.withContext(Dispatchers.Default) {
         val trimmed = instruction.trim()
-        if (trimmed.isBlank()) return
+        if (trimmed.isBlank()) return@withContext BrowserExecutionResult(isSuccess = true, summary = "")
 
         val taskId = UUID.randomUUID().toString()
         actionLog.setGoal(trimmed)
@@ -117,44 +140,90 @@ class BrowserAgent(
         val parsedIntent = BrowserCommandParser.parse(trimmed)
         if (parsedIntent is BrowserUserIntent.StopTask) {
             stopActiveTask()
-            onResult?.invoke("Browser task stopped.")
-            return
+            return@withContext BrowserExecutionResult(isSuccess = true, summary = "Browser task stopped.")
         }
 
         // Fast path for explicit hash shortcuts (e.g. #open https://..., #back, #down)
         if (trimmed.startsWith("#")) {
-            executeHashShortcut(taskId, trimmed, parsedIntent, onResult)
-            return
+            return@withContext executeHashShortcutSync(taskId, trimmed, parsedIntent, onProgress)
         }
 
-        currentTaskJob?.cancel()
-        currentTaskJob = scope.launch(Dispatchers.Default) {
-            _isBusy.value = true
-            val startTime = System.currentTimeMillis()
+        _isBusy.value = true
+        val startTime = System.currentTimeMillis()
 
-            try {
-                // 1. INITIAL OBSERVATION: Gather fresh browser state
-                val initialContext = capabilityApi.getPageContext().copy(
-                    taskId = taskId,
-                    userGoal = trimmed,
-                    executionStatus = BrowserExecutionStatus.OBSERVING
-                )
-                lastTaskContext = initialContext
+        try {
+            // 1. INITIAL OBSERVATION: Gather fresh browser state
+            val initialContext = capabilityApi.getPageContext().copy(
+                taskId = taskId,
+                userGoal = trimmed,
+                executionStatus = BrowserExecutionStatus.OBSERVING
+            )
+            lastTaskContext = initialContext
 
-                // 2. LLM-NATIVE MULTI-STEP REASONING LOOP
-                // The configured Browser Agent LLM itself understands the goal, formulates search queries,
-                // chooses actions, observes results, and verifies completion.
-                executeSemanticAgentLoop(taskId, trimmed, initialContext, onResult, startTime)
+            // 2. LLM-NATIVE MULTI-STEP REASONING LOOP
+            executeSemanticAgentLoopSync(taskId, trimmed, initialContext, onProgress, startTime)
+        } catch (ce: CancellationException) {
+            actionLog.cancelActive("Task stopped by user")
+            BrowserExecutionResult(isSuccess = false, summary = "Task cancelled")
+        } catch (e: Exception) {
+            actionLog.failAction("error", "Error: ${e.message}")
+            eventBus.emit(BrowserEvent.BrowserError(e.message ?: "Unknown error"))
+            BrowserExecutionResult(isSuccess = false, summary = "Browser task error: ${e.message}")
+        } finally {
+            _isBusy.value = false
+        }
+    }
 
-            } catch (ce: CancellationException) {
-                actionLog.cancelActive("Task stopped by user")
-            } catch (e: Exception) {
-                actionLog.failAction("error", "Error: ${e.message}")
-                eventBus.emit(BrowserEvent.BrowserError(e.message ?: "Unknown error"))
-                onResult?.invoke("Browser task error: ${e.message}")
-            } finally {
-                _isBusy.value = false
+    private suspend fun executeHashShortcutSync(
+        taskId: String,
+        rawInput: String,
+        intent: BrowserUserIntent,
+        onProgress: ((step: Int, total: Int, text: String) -> Unit)?
+    ): BrowserExecutionResult {
+        _isBusy.value = true
+        val startTime = System.currentTimeMillis()
+        try {
+            val currentContext = capabilityApi.getPageContext().copy(
+                taskId = taskId,
+                userGoal = rawInput
+            )
+            val defaultEngine = storageManager.settings.value.searchEngineUrl
+            val plan = BrowserPlanner.planFromIntent(intent, currentContext, defaultEngine)
+
+            _telemetry.value = _telemetry.value.copy(
+                totalTasks = _telemetry.value.totalTasks + 1,
+                zeroLlmTasks = _telemetry.value.zeroLlmTasks + 1,
+                lastAction = "Shortcut: ${plan.goal}"
+            )
+
+            var finalMessage = ""
+            var allSuccess = true
+            for ((idx, step) in plan.steps.withIndex()) {
+                onProgress?.invoke(idx + 1, plan.steps.size, step.userSummary)
+                val stepRes = executor.executeStep(step, currentContext) { false }
+                finalMessage = stepRes.summary
+                if (!stepRes.success) {
+                    allSuccess = false
+                    break
+                }
             }
+
+            delay(500)
+            val freshContext = capabilityApi.getPageContext()
+            lastTaskContext = freshContext
+            val duration = System.currentTimeMillis() - startTime
+            _telemetry.value = _telemetry.value.copy(lastTaskDurationMs = duration)
+            eventBus.emit(BrowserEvent.TaskCompleted(taskId, finalMessage))
+            val snippet = capabilityApi.extractPageSummary()
+            return BrowserExecutionResult(
+                isSuccess = allSuccess,
+                summary = finalMessage,
+                extractedContext = snippet.takeIf { it.isNotBlank() },
+                finalUrl = freshContext.currentUrl,
+                pageTitle = freshContext.currentTitle
+            )
+        } finally {
+            _isBusy.value = false
         }
     }
 
@@ -166,39 +235,8 @@ class BrowserAgent(
     ) {
         currentTaskJob?.cancel()
         currentTaskJob = scope.launch(Dispatchers.Default) {
-            _isBusy.value = true
-            val startTime = System.currentTimeMillis()
-            try {
-                val currentContext = capabilityApi.getPageContext().copy(
-                    taskId = taskId,
-                    userGoal = rawInput
-                )
-                val defaultEngine = storageManager.settings.value.searchEngineUrl
-                val plan = BrowserPlanner.planFromIntent(intent, currentContext, defaultEngine)
-
-                _telemetry.value = _telemetry.value.copy(
-                    totalTasks = _telemetry.value.totalTasks + 1,
-                    zeroLlmTasks = _telemetry.value.zeroLlmTasks + 1,
-                    lastAction = "Shortcut: ${plan.goal}"
-                )
-
-                var finalMessage = ""
-                for (step in plan.steps) {
-                    if (currentTaskJob?.isCancelled == true) break
-                    val stepRes = executor.executeStep(step, currentContext) { currentTaskJob?.isCancelled == true }
-                    finalMessage = stepRes.summary
-                    if (!stepRes.success) break
-                }
-
-                delay(500)
-                lastTaskContext = capabilityApi.getPageContext()
-                val duration = System.currentTimeMillis() - startTime
-                _telemetry.value = _telemetry.value.copy(lastTaskDurationMs = duration)
-                eventBus.emit(BrowserEvent.TaskCompleted(taskId, finalMessage))
-                onResult?.invoke(finalMessage)
-            } finally {
-                _isBusy.value = false
-            }
+            val res = executeHashShortcutSync(taskId, rawInput, intent, null)
+            onResult?.invoke(res.answer ?: res.summary)
         }
     }
 
@@ -209,25 +247,24 @@ class BrowserAgent(
      * ...
      * TURN N: Verified Destination -> SAME LLM -> STOP / ANSWER
      */
-    private suspend fun executeSemanticAgentLoop(
+    private suspend fun executeSemanticAgentLoopSync(
         taskId: String,
         originalGoal: String,
         initialContext: BrowserTaskContext,
-        onResult: ((String) -> Unit)?,
+        onProgress: ((step: Int, total: Int, text: String) -> Unit)?,
         startTime: Long
-    ) {
+    ): BrowserExecutionResult {
         var currentContext = initialContext
-        val maxSteps = 10
+        val maxSteps = 8
         var currentStepNum = 0
         var isGoalAchieved = false
         var lastStepSummary = ""
+        var finalExtractedAnswer: String? = null
 
-        // Loop guard to prevent repeating the identical action 3 times on unchanged page
         val actionHistory = mutableListOf<String>()
         val actionSignatures = mutableListOf<String>()
 
         while (currentStepNum < maxSteps && !isGoalAchieved) {
-            if (currentTaskJob?.isCancelled == true) break
             currentStepNum++
 
             _telemetry.value = _telemetry.value.copy(
@@ -237,7 +274,7 @@ class BrowserAgent(
             )
 
             // 1. OBSERVE (Eyes)
-            actionLog.startAction("step_$currentStepNum", "Step $currentStepNum: Page state analyze kar rahi hoon...")
+            actionLog.startAction("step_$currentStepNum", "Step $currentStepNum: Analyzing page state...")
             val pageSnippet = capabilityApi.extractPageSummary()
 
             // 2. UNDERSTAND & DECIDE (Brain - SAME CONFIGURED MODEL)
@@ -245,12 +282,20 @@ class BrowserAgent(
 
             // Handle Immediate Answer to question
             if (decision.action == "ANSWER" && !decision.answer.isNullOrBlank()) {
-                val finalAnswer = decision.answer
+                finalExtractedAnswer = decision.answer
                 actionLog.completeAction("step_$currentStepNum", decision.summary.ifBlank { "Answer ready" })
-                eventBus.emit(BrowserEvent.TaskCompleted(taskId, finalAnswer))
-                onResult?.invoke(finalAnswer)
+                eventBus.emit(BrowserEvent.TaskCompleted(taskId, finalExtractedAnswer))
                 isGoalAchieved = true
-                break
+                val duration = System.currentTimeMillis() - startTime
+                _telemetry.value = _telemetry.value.copy(lastTaskDurationMs = duration)
+                return BrowserExecutionResult(
+                    isSuccess = true,
+                    answer = finalExtractedAnswer,
+                    summary = decision.summary.ifBlank { finalExtractedAnswer },
+                    extractedContext = pageSnippet.takeIf { it.isNotBlank() },
+                    finalUrl = currentContext.currentUrl,
+                    pageTitle = currentContext.currentTitle
+                )
             }
 
             // Handle Task Completion / Stop
@@ -264,9 +309,17 @@ class BrowserAgent(
                 }
                 actionLog.completeAction("step_$currentStepNum", msg)
                 eventBus.emit(BrowserEvent.TaskCompleted(taskId, msg))
-                onResult?.invoke(msg)
                 isGoalAchieved = true
-                break
+                val duration = System.currentTimeMillis() - startTime
+                _telemetry.value = _telemetry.value.copy(lastTaskDurationMs = duration)
+                return BrowserExecutionResult(
+                    isSuccess = true,
+                    answer = decision.answer,
+                    summary = msg,
+                    extractedContext = pageSnippet.takeIf { it.isNotBlank() },
+                    finalUrl = currentContext.currentUrl,
+                    pageTitle = currentContext.currentTitle
+                )
             }
 
             // 3. TRANSLATE TO STRUCTURED BROWSER ACTION
@@ -412,10 +465,20 @@ class BrowserAgent(
                 val fallbackMsg = decision.summary.ifBlank { "Browser task complete." }
                 actionLog.completeAction("step_$currentStepNum", fallbackMsg)
                 eventBus.emit(BrowserEvent.TaskCompleted(taskId, fallbackMsg))
-                onResult?.invoke(fallbackMsg)
                 isGoalAchieved = true
-                break
+                val duration = System.currentTimeMillis() - startTime
+                _telemetry.value = _telemetry.value.copy(lastTaskDurationMs = duration)
+                return BrowserExecutionResult(
+                    isSuccess = true,
+                    answer = decision.answer,
+                    summary = fallbackMsg,
+                    extractedContext = pageSnippet.takeIf { it.isNotBlank() },
+                    finalUrl = currentContext.currentUrl,
+                    pageTitle = currentContext.currentTitle
+                )
             }
+
+            onProgress?.invoke(currentStepNum, maxSteps, step.userSummary)
 
             // High-risk action detection (payments, destructive actions, checkout, sensitive submits)
             val actionDesc = (step.userSummary + " " + step.arguments.values.joinToString(" ")).lowercase(java.util.Locale.ROOT)
@@ -440,8 +503,12 @@ class BrowserAgent(
                     val cancelMsg = "Action cancelled by user for security."
                     actionLog.cancelActive(cancelMsg)
                     eventBus.emit(BrowserEvent.TaskCancelled(taskId, cancelMsg))
-                    onResult?.invoke(cancelMsg)
-                    break
+                    return BrowserExecutionResult(
+                        isSuccess = false,
+                        summary = cancelMsg,
+                        finalUrl = currentContext.currentUrl,
+                        pageTitle = currentContext.currentTitle
+                    )
                 }
             }
 
@@ -450,24 +517,30 @@ class BrowserAgent(
             val signature = "${decision.action}_${step.arguments}_${currentContext.currentUrl}"
             val duplicateCount = actionSignatures.count { it == signature }
             if (duplicateCount >= 2) {
-                // If the same action repeated on same URL, break loop or try scrolling
                 if (currentContext.extractedCandidates.size > 1 && decision.action == "CLICK_CANDIDATE") {
-                    // Try next candidate to unblock
                     val nextIdx = (decision.index ?: 1) + 1
                     activeStep = step.copy(arguments = mapOf("index" to nextIdx.toString()))
                 } else {
                     val loopMsg = "${currentContext.currentTitle.ifBlank { "Website" }} open kar di gayi hai."
                     actionLog.completeAction("step_$currentStepNum", loopMsg)
                     eventBus.emit(BrowserEvent.TaskCompleted(taskId, loopMsg))
-                    onResult?.invoke(loopMsg)
                     isGoalAchieved = true
-                    break
+                    val duration = System.currentTimeMillis() - startTime
+                    _telemetry.value = _telemetry.value.copy(lastTaskDurationMs = duration)
+                    return BrowserExecutionResult(
+                        isSuccess = true,
+                        answer = decision.answer,
+                        summary = loopMsg,
+                        extractedContext = pageSnippet.takeIf { it.isNotBlank() },
+                        finalUrl = currentContext.currentUrl,
+                        pageTitle = currentContext.currentTitle
+                    )
                 }
             }
             actionSignatures.add(signature)
 
             // 5. ACT (Hands)
-            val res = executor.executeStep(activeStep, currentContext) { currentTaskJob?.isCancelled == true }
+            val res = executor.executeStep(activeStep, currentContext) { false }
             lastStepSummary = res.summary
             actionHistory.add("Step $currentStepNum: ${activeStep.toolName}(${activeStep.arguments}) -> ${if (res.success) "SUCCESS" else "FAILED"}")
 
@@ -481,7 +554,6 @@ class BrowserAgent(
                 lastActionResult = if (res.success) "SUCCESS: ${res.summary}" else "FAILED: ${res.summary}"
             )
 
-            // If candidates not populated yet on search results, short delay to catch dynamic DOM
             if (step.toolName == "search" && freshContext.extractedCandidates.isEmpty()) {
                 delay(1200)
                 freshContext = capabilityApi.getPageContext().copy(
@@ -504,18 +576,32 @@ class BrowserAgent(
                 val finalMsg = "${currentContext.currentTitle.ifBlank { "Website" }} open ho gayi hai aur verify ho gayi."
                 actionLog.completeAction("step_$currentStepNum", finalMsg)
                 eventBus.emit(BrowserEvent.TaskCompleted(taskId, finalMsg))
-                onResult?.invoke(finalMsg)
-                break
+                val duration = System.currentTimeMillis() - startTime
+                _telemetry.value = _telemetry.value.copy(lastTaskDurationMs = duration)
+                return BrowserExecutionResult(
+                    isSuccess = true,
+                    answer = decision.answer,
+                    summary = finalMsg,
+                    extractedContext = freshSnippet.takeIf { it.isNotBlank() },
+                    finalUrl = currentContext.currentUrl,
+                    pageTitle = currentContext.currentTitle
+                )
             }
         }
 
-        if (!isGoalAchieved) {
-            val finalMsg = lastStepSummary.ifBlank { "Browser task finished after $currentStepNum steps." }
-            eventBus.emit(BrowserEvent.TaskCompleted(taskId, finalMsg))
-            onResult?.invoke(finalMsg)
-        }
+        val freshSnippet = capabilityApi.extractPageSummary()
+        val finalMsg = lastStepSummary.ifBlank { "Browser task finished after $currentStepNum steps." }
+        eventBus.emit(BrowserEvent.TaskCompleted(taskId, finalMsg))
 
         val duration = System.currentTimeMillis() - startTime
         _telemetry.value = _telemetry.value.copy(lastTaskDurationMs = duration)
+        return BrowserExecutionResult(
+            isSuccess = isGoalAchieved || lastStepSummary.isNotBlank(),
+            answer = finalExtractedAnswer,
+            summary = finalMsg,
+            extractedContext = freshSnippet.takeIf { it.isNotBlank() },
+            finalUrl = currentContext.currentUrl,
+            pageTitle = currentContext.currentTitle
+        )
     }
 }

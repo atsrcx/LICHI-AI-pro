@@ -480,14 +480,34 @@ class CapabilityCatalogV2(
                 ActionSpec(
                     actionName = "CREATE",
                     description = "Create a new alarm, reminder, routine, or task.",
-                    requiredParameters = listOf("input"),
-                    exampleArguments = mapOf("input" to "kal subah 8 baje alarm lagao")
+                    requiredParameters = listOf("title"),
+                    optionalParameters = listOf("time", "is_alarm", "recurrence", "input"),
+                    exampleArguments = mapOf("title" to "Buy groceries", "time" to "18:00")
                 ),
                 ActionSpec(
                     actionName = "LIST",
                     description = "List all alarms or reminders.",
                     requiredParameters = emptyList(),
                     exampleArguments = emptyMap()
+                ),
+                ActionSpec(
+                    actionName = "DELETE",
+                    description = "Delete a specific alarm or reminder by title or ID.",
+                    requiredParameters = listOf("title"),
+                    exampleArguments = mapOf("title" to "Morning walk")
+                ),
+                ActionSpec(
+                    actionName = "COMPLETE",
+                    description = "Mark a reminder or task as completed.",
+                    requiredParameters = listOf("title"),
+                    exampleArguments = mapOf("title" to "Call Rahul")
+                ),
+                ActionSpec(
+                    actionName = "SNOOZE",
+                    description = "Snooze an active or upcoming reminder.",
+                    requiredParameters = emptyList(),
+                    optionalParameters = listOf("title", "minutes"),
+                    exampleArguments = mapOf("minutes" to "10")
                 )
             ),
             riskLevel = RiskLevel.LOW,

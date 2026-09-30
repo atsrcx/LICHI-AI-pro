@@ -788,6 +788,22 @@ class UniversalContextContinuityEngine private constructor() {
             }
         }
 
+        val isTwitter = lower.contains("twitter wal") || lower.contains("x wal") ||
+                lower.contains("twitter profile") || lower.contains("x profile")
+        if (isTwitter) {
+            val match = profiles.firstOrNull { it.platform?.contains("TWITTER", true) == true }
+            if (match != null) {
+                return ContextResolutionResult(
+                    resolvedEntity = match,
+                    targetText = match.name,
+                    targetUrl = match.url,
+                    confidence = 0.98f,
+                    dialogueAct = DialogueAct.REFERENCE_QUERY,
+                    reason = "Matched Twitter qualifier."
+                )
+            }
+        }
+
         return null
     }
 

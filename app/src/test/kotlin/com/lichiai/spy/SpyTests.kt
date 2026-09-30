@@ -2,7 +2,6 @@ package com.lichiai.spy
 
 import com.lichiai.calling.intent.CallAction
 import com.lichiai.calling.intent.CallActionIntentResolver
-import com.lichiai.calling.intent.CallIntentResolver
 import com.lichiai.spy.apify.ActorIdentifierResolver
 import com.lichiai.spy.core.PlatformType
 import com.lichiai.spy.core.SpyGate
@@ -159,11 +158,7 @@ class SpyTests {
         assertEquals("+919927881086", task.target)
         assertEquals(PlatformType.UNKNOWN, task.platform)
 
-        // Verify Call Resolver completely ignores #Spy input
-        val callResolver = CallIntentResolver()
-        val callIntent = callResolver.resolve(input)
-        assertEquals(CallAction.NO_CALL_INTENT, callIntent.action)
-
+        // Verify Call Action Resolver completely ignores #Spy input
         val callActionResolver = CallActionIntentResolver()
         val action = callActionResolver.resolve(input)
         assertNull(action)
@@ -224,10 +219,8 @@ class SpyTests {
 
     @Test
     fun testSpyForensic_TestG_NormalCallsPreserved() {
-        val callResolver = CallIntentResolver()
-        val res = callResolver.resolve("Rahul ko call karo")
-        assertEquals(CallAction.CALL_CONTACT, res.action)
-        assertEquals("Rahul", res.targetText)
+        val trigger = SpyGate.checkTrigger("Rahul ko call karo")
+        assertTrue(trigger is SpyGateResult.NotTriggered)
     }
 
     @Test

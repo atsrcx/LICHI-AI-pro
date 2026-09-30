@@ -87,17 +87,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         browserController = browserController,
         webIntelligenceManager = webIntelligenceManager
     )
-    val capabilityRegistry = com.lichiai.intent.registry.CapabilityRegistry(
-        context = app,
-        isAutonomousAgentEnabled = { autonomousAgentTool.isEnabled() },
-        isWebSearchEnabled = { true }
-    )
-    val universalIntentEngine = com.lichiai.intent.UniversalIntentEngine(
-        capabilityRegistry = capabilityRegistry,
-        contextBuilder = intentContextBuilder,
-        semanticRouter = com.lichiai.intent.router.SemanticRouter(availableSkillsProvider = { skillRepository.skills.value }),
-        llmClient = client
-    )
     val routeDispatcher = com.lichiai.intent.dispatcher.RouteDispatcher(
         context = app,
         browserController = browserController,
@@ -109,15 +98,16 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         onNavigateToTerminal = { _terminalNavigationEvent.tryEmit(Unit) }
     )
 
+    val capabilityCatalogV2 = com.lichiai.orchestrator.catalog.CapabilityCatalogV2(
+        isAutonomousAgentEnabled = { autonomousAgentTool.isEnabled() },
+        isWebSearchEnabled = { true }
+    )
+
     val taskOrchestratorV2 = com.lichiai.orchestrator.UniversalTaskOrchestratorV2(
         context = app,
-        capabilityCatalog = com.lichiai.orchestrator.catalog.CapabilityCatalogV2(
-            isAutonomousAgentEnabled = { autonomousAgentTool.isEnabled() },
-            isWebSearchEnabled = { true }
-        ),
+        capabilityCatalog = capabilityCatalogV2,
         contextBuilder = intentContextBuilder,
         routeDispatcher = routeDispatcher,
-        legacyIntentEngine = universalIntentEngine,
         llmClient = client
     )
 
@@ -140,7 +130,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             _browserNavigationEvent.tryEmit(Unit)
             browserController.agent.submitInstruction(command)
         },
-        universalIntentEngine = universalIntentEngine,
         routeDispatcher = routeDispatcher,
         taskOrchestratorV2 = taskOrchestratorV2,
         providerStore = providerStore
@@ -549,10 +538,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             runCatching { memoryEngine.recordTurn(conversationId = activeId, messageId = userMsgId, role = "user", content = trimmed) }
 
             var webSearchOverridePrompt = ""
+            val stepsList = mutableListOf<com.lichiai.ui.activity.AssistantActivityStep>()
 
-            if (attachments.isEmpty() && orchMode != com.lichiai.orchestrator.model.OrchestratorMode.DISABLED) {
+            if (attachments.isEmpty()) {
                 val intentCtx = intentContextBuilder.buildContext(_activeId.value)
-                val stepsList = mutableListOf<com.lichiai.ui.activity.AssistantActivityStep>()
 
                 _isStreaming.value = true
                 _liveActivityState.value = com.lichiai.ui.activity.AssistantActivityState(
@@ -573,11 +562,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     messageId = assistantMsgId,
                     conversationId = activeId
                 ) { step, total, statusText ->
-                    stepsList.add(com.lichiai.ui.activity.AssistantActivityStep(
+                    val updatedHistory = stepsList.map { it.copy(isCompleted = true) }.toMutableList()
+                    val existingIndex = updatedHistory.indexOfFirst { it.stepIndex == step }
+                    val currentStep = com.lichiai.ui.activity.AssistantActivityStep(
                         stepIndex = step,
                         title = statusText,
-                        isCompleted = true
-                    ))
+                        isCompleted = false,
+                        isFailed = false
+                    )
+                    if (existingIndex >= 0) {
+                        updatedHistory[existingIndex] = currentStep
+                    } else {
+                        updatedHistory.add(currentStep)
+                    }
+                    stepsList.clear()
+                    stepsList.addAll(updatedHistory)
+
                     _liveActivityState.value = com.lichiai.ui.activity.AssistantActivityState(
                         requestId = requestId,
                         messageId = assistantMsgId,
@@ -591,10 +591,55 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
 
-                _liveActivityState.value = null
-                _isStreaming.value = false
+                if (!orchResult.isSuccess) {
+                    _liveActivityState.value = null
+                    _isStreaming.value = false
 
-                if (!orchResult.isDirectChat) {
+                    val failedSteps = stepsList.mapIndexed { idx, s ->
+                        if (idx == stepsList.lastIndex) s.copy(isCompleted = false, isFailed = true) else s.copy(isCompleted = true)
+                    }
+                    val failedActivity = com.lichiai.ui.activity.AssistantActivityState(
+                        requestId = requestId,
+                        messageId = assistantMsgId,
+                        kind = com.lichiai.ui.activity.ActivityKind.FAILED,
+                        title = "Task failed",
+                        subtitle = if (stepsList.isNotEmpty()) "Failed at step ${stepsList.size}" else "",
+                        isActive = false,
+                        stepHistory = failedSteps
+                    )
+                    updateAssistantMessage(
+                        activeId,
+                        assistantMsgId,
+                        content = orchResult.finalSpeech.ifBlank { "⚠️ Task could not be completed." },
+                        taskActivity = failedActivity
+                    )
+                    if (orchResult.requiresBrowserUi) {
+                        _browserNavigationEvent.emit(Unit)
+                    }
+                    return@launch
+                }
+
+                if (orchResult.isDirectChat) {
+                    _liveActivityState.value = null
+                    _isStreaming.value = false
+                    if (orchResult.directChatPrompt.isNotBlank() && orchResult.directChatPrompt != trimmed) {
+                        webSearchOverridePrompt = orchResult.directChatPrompt
+                    }
+                } else if (orchResult.webContextPrompt != null || orchResult.requiresLlmSynthesis) {
+                    // Search or Information Task: Web context produced and ready for LLM synthesis!
+                    webSearchOverridePrompt = orchResult.webContextPrompt ?: ""
+                    val allCompletedSteps = stepsList.map { it.copy(isCompleted = true) }
+                    stepsList.clear()
+                    stepsList.addAll(allCompletedSteps)
+
+                    if (orchResult.requiresBrowserUi) {
+                        _browserNavigationEvent.emit(Unit)
+                    }
+                } else {
+                    // Action-only Task Complete: Call, Volume, Media, Terminal, Alarm, etc.
+                    _liveActivityState.value = null
+                    _isStreaming.value = false
+
                     val iconPrefix = when (orchResult.primaryCapability) {
                         com.lichiai.intent.model.LichiCapability.BROWSER -> "🌐 "
                         com.lichiai.intent.model.LichiCapability.ANDROID_AGENT -> "🤖 "
@@ -605,14 +650,15 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         else -> ""
                     }
                     val finalMsgContent = "$iconPrefix${orchResult.finalSpeech.ifBlank { "Task completed." }}"
+                    val allCompletedSteps = stepsList.map { it.copy(isCompleted = true) }
                     val completedActivity = com.lichiai.ui.activity.AssistantActivityState(
                         requestId = requestId,
                         messageId = assistantMsgId,
-                        kind = if (orchResult.isSuccess) com.lichiai.ui.activity.ActivityKind.COMPLETED else com.lichiai.ui.activity.ActivityKind.FAILED,
-                        title = if (orchResult.isSuccess) "Task completed" else "Task paused",
+                        kind = com.lichiai.ui.activity.ActivityKind.COMPLETED,
+                        title = "Task completed",
                         subtitle = if (stepsList.isNotEmpty()) "Completed ${stepsList.size} step${if (stepsList.size > 1) "s" else ""}" else "",
                         isActive = false,
-                        stepHistory = stepsList.toList()
+                        stepHistory = allCompletedSteps
                     )
                     updateAssistantMessage(
                         activeId,
@@ -643,316 +689,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         }
                     }
                     return@launch
-                }
-
-                if (orchResult.webContextPrompt != null) {
-                    webSearchOverridePrompt = orchResult.webContextPrompt
-                } else if (orchResult.directChatPrompt.isNotBlank() && orchResult.directChatPrompt != trimmed) {
-                    webSearchOverridePrompt = orchResult.directChatPrompt
-                }
-            } else {
-                val intentResolution = if (attachments.isEmpty()) {
-                    val intentCtx = intentContextBuilder.buildContext(_activeId.value)
-                    universalIntentEngine.resolve(
-                        rawInput = trimmed,
-                        context = intentCtx,
-                        provider = provider,
-                        modelId = model
-                    )
-                } else {
-                    com.lichiai.intent.model.IntentResolutionResult(
-                        intent = com.lichiai.intent.model.ResolvedIntent.NormalChat(prompt = trimmed),
-                        confidence = 1.0f,
-                        source = com.lichiai.intent.model.ResolutionSource.FALLBACK,
-                        normalizedInput = trimmed,
-                        rationale = "Multimodal attachments provided."
-                    )
-                }
-
-                when (val resIntent = intentResolution.intent) {
-                    is com.lichiai.intent.model.ResolvedIntent.TerminalTask -> {
-                        val outcome = routeDispatcher.dispatch(resIntent)
-                        if (outcome is com.lichiai.intent.dispatcher.DispatchExecutionResult.TerminalExecuted) {
-                            val finalActivity = com.lichiai.terminal.task.TerminalTaskManager.getInstance(getApplication()).currentLiveActivity.value
-                            updateAssistantMessage(
-                                activeId,
-                                assistantMsgId,
-                                content = outcome.message,
-                                taskActivity = finalActivity
-                            )
-                            _liveActivityState.value = null
-                            if (outcome.requiresScreenNavigation) {
-                                _terminalNavigationEvent.emit(Unit)
-                            }
-                        }
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.TimeReminderTask -> {
-                        val outcome = timeCapabilityAdapter.handleQuery(resIntent.rawInput)
-                        updateAssistantMessage(activeId, assistantMsgId, content = "⏰ ${outcome.naturalSpeech}")
-                        if (outcome.requiresScreenNavigation) {
-                            _reminderNavigationEvent.emit(Unit)
-                        }
-                        intentContextBuilder.recordExecution(
-                            capability = com.lichiai.intent.model.LichiCapability.TIME_REMINDER,
-                            userGoal = trimmed,
-                            assistantResponse = outcome.naturalSpeech
-                        )
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.CallTask -> {
-                        val callOutcome = universalCallEngine.executeIntent(resIntent.callIntent, sourceMode = "TEXT")
-                        updateAssistantMessage(activeId, assistantMsgId, content = callOutcome.message)
-                        intentContextBuilder.recordExecution(
-                            capability = com.lichiai.intent.model.LichiCapability.CALLS,
-                            userGoal = trimmed,
-                            assistantResponse = callOutcome.message
-                        )
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.BrowserTask -> {
-                        updateAssistantMessage(activeId, assistantMsgId, content = "🌐 ${resIntent.naturalAcknowledgment}")
-
-                        // Navigate to visible BrowserScreen
-                        _browserNavigationEvent.emit(Unit)
-
-                        // Execute via routeDispatcher / browserController
-                        val execInstruction = if (resIntent.action == com.lichiai.intent.model.BrowserActionType.SEARCH && !resIntent.query.isNullOrBlank()) {
-                            "search on ${resIntent.searchEngine} for ${resIntent.query}"
-                        } else {
-                            resIntent.rawPrompt.ifBlank { trimmed }
-                        }
-
-                        if (resIntent.action == com.lichiai.intent.model.BrowserActionType.SEARCH && !resIntent.query.isNullOrBlank()) {
-                            browserController.search(resIntent.query, resIntent.searchEngine)
-                        }
-
-                        browserController.agent.submitInstruction(execInstruction) { resultText ->
-                            viewModelScope.launch {
-                                if (resultText.isNotBlank()) {
-                                    updateAssistantMessage(activeId, assistantMsgId, content = "🌐 $resultText")
-                                    intentContextBuilder.recordExecution(
-                                        capability = com.lichiai.intent.model.LichiCapability.BROWSER,
-                                        userGoal = trimmed,
-                                        assistantResponse = resultText,
-                                        searchQuery = resIntent.query
-                                    )
-                                }
-                            }
-                        }
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.AndroidAgentTask -> {
-                        if (!autonomousAgentTool.isEnabled()) {
-                            val responseMsgText = "Autonomous Agent is currently disabled. You can enable it in Settings under Autonomous Agent V2 to perform device automation."
-                            updateAssistantMessage(activeId, assistantMsgId, content = responseMsgText)
-                            return@launch
-                        }
-
-                        val skillTag = if (resIntent.matchedSkills.isNotEmpty()) {
-                            " [Skill: ${resIntent.matchedSkills.joinToString { it.name }}]"
-                        } else ""
-
-                        updateAssistantMessage(activeId, assistantMsgId, content = "🤖$skillTag ${resIntent.naturalAcknowledgment}")
-
-                        val stepsList = mutableListOf<com.lichiai.ui.activity.AssistantActivityStep>()
-                        _isStreaming.value = true
-                        _liveActivityState.value = com.lichiai.ui.activity.AssistantActivityState(
-                            requestId = requestId,
-                            messageId = assistantMsgId,
-                            kind = com.lichiai.ui.activity.ActivityKind.AGENT_WORKING,
-                            title = "Agent working",
-                            subtitle = resIntent.naturalAcknowledgment,
-                            isActive = true
-                        )
-
-                        val result = autonomousAgentTool.execute(resIntent.goal, resIntent.matchedSkills) { step, total, statusText ->
-                            stepsList.add(com.lichiai.ui.activity.AssistantActivityStep(
-                                stepIndex = step,
-                                title = statusText,
-                                isCompleted = true
-                            ))
-                            _liveActivityState.value = com.lichiai.ui.activity.AssistantActivityState(
-                                requestId = requestId,
-                                messageId = assistantMsgId,
-                                kind = com.lichiai.ui.activity.ActivityKind.INTERACTING_SCREEN,
-                                title = "Interacting with screen",
-                                subtitle = "Step $step/$total: $statusText",
-                                step = step,
-                                totalSteps = total,
-                                isActive = true,
-                                stepHistory = stepsList.toList()
-                            )
-                        }
-
-                        val finalOutput = if (result.isSuccess) {
-                            result.summary
-                        } else {
-                            "⚠️ ${result.summary}"
-                        }
-
-                        _liveActivityState.value = null
-                        _isStreaming.value = false
-
-                        val completedActivity = com.lichiai.ui.activity.AssistantActivityState(
-                            requestId = requestId,
-                            messageId = assistantMsgId,
-                            kind = if (result.isSuccess) com.lichiai.ui.activity.ActivityKind.COMPLETED else com.lichiai.ui.activity.ActivityKind.FAILED,
-                            title = if (result.isSuccess) "Agent completed" else "Agent paused",
-                            subtitle = "Executed ${result.totalSteps} steps",
-                            isActive = false,
-                            stepHistory = stepsList.toList()
-                        )
-                        updateAssistantMessage(activeId, assistantMsgId, content = finalOutput, taskActivity = completedActivity)
-                        intentContextBuilder.recordExecution(
-                            capability = com.lichiai.intent.model.LichiCapability.ANDROID_AGENT,
-                            userGoal = trimmed,
-                            assistantResponse = result.summary
-                        )
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.SkillManagementTask -> {
-                        handleSkillManagement(resIntent.request, activeId, assistantMsgId)
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.Clarification -> {
-                        updateAssistantMessage(activeId, assistantMsgId, content = resIntent.question)
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.MultiStepTask -> {
-                        updateAssistantMessage(activeId, assistantMsgId, content = "🌐 ${resIntent.naturalAcknowledgment}")
-
-                        val stepsList = mutableListOf<com.lichiai.ui.activity.AssistantActivityStep>()
-                        _isStreaming.value = true
-                        _liveActivityState.value = com.lichiai.ui.activity.AssistantActivityState(
-                            requestId = requestId,
-                            messageId = assistantMsgId,
-                            kind = com.lichiai.ui.activity.ActivityKind.AGENT_WORKING,
-                            title = "Executing task...",
-                            subtitle = resIntent.naturalAcknowledgment,
-                            isActive = true
-                        )
-                        val result = routeDispatcher.dispatch(resIntent) { step, total, text ->
-                            stepsList.add(com.lichiai.ui.activity.AssistantActivityStep(
-                                stepIndex = step,
-                                title = text,
-                                isCompleted = true
-                            ))
-                            _liveActivityState.value = com.lichiai.ui.activity.AssistantActivityState(
-                                requestId = requestId,
-                                messageId = assistantMsgId,
-                                kind = com.lichiai.ui.activity.ActivityKind.AGENT_WORKING,
-                                title = "Step $step/$total",
-                                subtitle = text,
-                                step = step,
-                                totalSteps = total,
-                                isActive = true,
-                                stepHistory = stepsList.toList()
-                            )
-                        }
-                        _liveActivityState.value = null
-                        _isStreaming.value = false
-
-                        val finalMsgText = when (result) {
-                            is com.lichiai.intent.dispatcher.DispatchExecutionResult.BrowserExecuted -> "🌐 ${result.message}"
-                            is com.lichiai.intent.dispatcher.DispatchExecutionResult.ExecutionFailed -> "⚠️ ${result.error}"
-                            else -> "Task completed."
-                        }
-                        val completedActivity = com.lichiai.ui.activity.AssistantActivityState(
-                            requestId = requestId,
-                            messageId = assistantMsgId,
-                            kind = com.lichiai.ui.activity.ActivityKind.COMPLETED,
-                            title = "Task completed",
-                            subtitle = "Executed ${stepsList.size} steps",
-                            isActive = false,
-                            stepHistory = stepsList.toList()
-                        )
-                        updateAssistantMessage(activeId, assistantMsgId, content = finalMsgText, taskActivity = completedActivity)
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.WebSearchTask -> {
-                        // Pre-fetch Web Search data to enrich conversational response
-                        runCatching {
-                            val webResponse = webIntelligenceManager.executeSearch(
-                                query = resIntent.query,
-                                isImageSearch = resIntent.isImageSearch,
-                                isNewsSearch = resIntent.isNewsSearch
-                            )
-                            webSearchOverridePrompt = webIntelligenceManager.buildWebContextPrompt(webResponse)
-                            intentContextBuilder.recordExecution(
-                                capability = com.lichiai.intent.model.LichiCapability.WEB_SEARCH,
-                                userGoal = trimmed,
-                                assistantResponse = "Web search executed for ${resIntent.query}",
-                                searchQuery = resIntent.query
-                            )
-                        }.onFailure { err ->
-                            android.util.Log.w("ChatViewModel", "Web search failed: ${err.message}")
-                        }
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.MediaTask -> {
-                        routeDispatcher.dispatch(resIntent)
-                        updateAssistantMessage(activeId, assistantMsgId, content = "🎵 Playing media...")
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.DeviceControlTask -> {
-                        routeDispatcher.dispatch(resIntent)
-                        updateAssistantMessage(activeId, assistantMsgId, content = "Adjusted device setting.")
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.Cancellation -> {
-                        updateAssistantMessage(activeId, assistantMsgId, content = resIntent.naturalAcknowledgment)
-                        intentContextBuilder.reset()
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.ResumeTask -> {
-                        updateAssistantMessage(activeId, assistantMsgId, content = resIntent.naturalAcknowledgment)
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.TaskInterruption -> {
-                        updateAssistantMessage(activeId, assistantMsgId, content = resIntent.naturalAcknowledgment)
-                        return@launch
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.ContextualQuestion -> {
-                        // Handled in normal conversational flow
-                    }
-
-                    is com.lichiai.intent.model.ResolvedIntent.NormalChat -> {
-                        // Proceed to normal conversation flow
-                    }
-
-                    else -> {
-                        val outcome = routeDispatcher.dispatch(resIntent)
-                        val outcomeMsg = when (outcome) {
-                            is com.lichiai.intent.dispatcher.DispatchExecutionResult.WebSearchExecuted -> {
-                                webSearchOverridePrompt = outcome.contextPrompt
-                                outcome.message
-                            }
-                            is com.lichiai.intent.dispatcher.DispatchExecutionResult.BrowserExecuted -> {
-                                _browserNavigationEvent.emit(Unit)
-                                outcome.message
-                            }
-                            is com.lichiai.intent.dispatcher.DispatchExecutionResult.ExecutionFailed -> "⚠️ ${outcome.error}"
-                            else -> resIntent.naturalAcknowledgment
-                        }
-                        if (webSearchOverridePrompt.isNullOrBlank()) {
-                            updateAssistantMessage(activeId, assistantMsgId, content = outcomeMsg)
-                            return@launch
-                        }
-                    }
                 }
             }
 
@@ -1086,7 +822,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 title = "Thinking...",
                 subtitle = if (webContextPrompt.isNotBlank()) "Synthesizing research..." else "Formulating response",
                 isActive = true,
-                sources = capturedWebActivity?.completedSources ?: emptyList()
+                sources = capturedWebActivity?.completedSources ?: emptyList(),
+                stepHistory = stepsList.toList()
             )
             val builder = StringBuilder()
 
@@ -1139,11 +876,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         }
                 } finally {
                     _liveActivityState.value = null
-                    val completedActivity = capturedWebActivity?.toAssistantActivity(
+                    val completedActivity = (capturedWebActivity?.toAssistantActivity(
                         requestId = requestId,
                         messageId = assistantMsgId
-                    )?.copy(
-                        isActive = false
+                    ) ?: if (stepsList.isNotEmpty() || webContextPrompt.isNotBlank()) {
+                        com.lichiai.ui.activity.AssistantActivityState(
+                            requestId = requestId,
+                            messageId = assistantMsgId,
+                            kind = com.lichiai.ui.activity.ActivityKind.COMPLETED,
+                            title = if (webContextPrompt.isNotBlank()) "Web research" else "Task completed",
+                            subtitle = if (stepsList.isNotEmpty()) "Completed ${stepsList.size} step${if (stepsList.size > 1) "s" else ""}" else "",
+                            stepHistory = stepsList.toList(),
+                            sources = capturedWebActivity?.completedSources ?: emptyList()
+                        )
+                    } else null)?.copy(
+                        isActive = false,
+                        stepHistory = if (stepsList.isNotEmpty()) stepsList.toList() else emptyList()
                     )
                     val finalContent = builder.toString()
                     if (finalContent.isNotEmpty()) {

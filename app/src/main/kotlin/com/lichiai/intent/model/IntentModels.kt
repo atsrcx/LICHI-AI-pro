@@ -195,6 +195,8 @@ data class IntentContext(
 
 /**
  * Formally resolved intent ready for execution by a specific capability.
+ * ARCHITECTURAL RULE: ResolvedIntent is an execution adapter and is NOT an intent classifier.
+ * It encapsulates structured execution arguments produced by UniversalLlmPlanner / TaskPlan steps.
  */
 sealed class ResolvedIntent {
     abstract val capability: LichiCapability
@@ -379,6 +381,14 @@ sealed class ResolvedIntent {
 
     data class TimeReminderTask(
         val rawInput: String,
+        val action: String = "CREATE",
+        val title: String? = null,
+        val time: String? = null,
+        val timeMs: Long? = null,
+        val isAlarm: Boolean = false,
+        val recurrence: String? = null,
+        val id: String? = null,
+        val minutes: Int = 10,
         override val naturalAcknowledgment: String
     ) : ResolvedIntent() {
         override val capability: LichiCapability get() = LichiCapability.TIME_REMINDER

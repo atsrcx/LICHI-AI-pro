@@ -10,7 +10,6 @@ import com.lichiai.browser.inspection.network.NetworkObserver
 import com.lichiai.browser.inspection.security.SecretRedactor
 import com.lichiai.browser.inspection.security.SecurityAuditReport
 import com.lichiai.intent.model.ResolvedIntent
-import com.lichiai.intent.router.DeterministicRuleRouter
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -129,38 +128,6 @@ class BrowserInspectionDevToolsTest {
             consoleLogs = emptyList()
         )
         assertNotNull(findings)
-    }
-
-    @Test
-    fun testDeterministicRuleRouterInspectionPhrases() {
-        val router = DeterministicRuleRouter()
-
-        val phrases = listOf(
-            "Is page ke saare links nikalo." to "links",
-            "Is website ke saare API endpoints identify karo." to "endpoints",
-            "Direct download links nikalo." to "download",
-            "Kaun kaun se resources load ho rahe hain?" to "resources",
-            "Is page ke forms batao." to "forms",
-            "Saare scripts aur external domains batao." to "scripts",
-            "Network requests analyse karo." to "network",
-            "Is website ko deeply analyse karo." to "deep inspect",
-            "Is website se jitne URLs discover ho sakte hain unko categorize karo." to "urls",
-            "Is site ke observed APIs ko method, URL, parameters aur response metadata ke saath explain karo." to "observed apis",
-            "Is website ka technical structure samjhao." to "technical structure",
-            "Is page mein jo requests abhi hui hain unka analysis do." to "requests abhi hui",
-            "Complete inspection report second screen par dikhao." to "second screen"
-        )
-
-        for ((phrase, expectedKeyword) in phrases) {
-            val routeResult = router.route(phrase)
-            assertNotNull("Phrase must be routed by DeterministicRuleRouter: '$phrase'", routeResult)
-            val intent = routeResult!!.first
-            assertTrue("Intent must be InspectTask for: '$phrase'", intent is ResolvedIntent.InspectTask)
-            val task = intent as ResolvedIntent.InspectTask
-            if (phrase.contains("second screen")) {
-                assertTrue("Show UI must be true for second screen request", task.showUi)
-            }
-        }
     }
 
     @Test

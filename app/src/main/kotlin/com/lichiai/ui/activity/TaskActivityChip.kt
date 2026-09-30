@@ -344,12 +344,27 @@ fun TaskActivityChip(
                                     modifier = Modifier.fillMaxWidth(),
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Icon(
-                                        imageVector = if (step.isFailed) Icons.Default.Warning else Icons.Default.CheckCircle,
-                                        contentDescription = null,
-                                        tint = if (step.isFailed) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary,
-                                        modifier = Modifier.size(11.dp)
-                                    )
+                                    if (step.isFailed) {
+                                        Icon(
+                                            imageVector = Icons.Default.Warning,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error,
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                    } else if (!step.isCompleted) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(10.dp),
+                                            strokeWidth = 1.5.dp,
+                                            color = MaterialTheme.colorScheme.primary
+                                        )
+                                    } else {
+                                        Icon(
+                                            imageVector = Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(11.dp)
+                                        )
+                                    }
                                     Spacer(Modifier.width(6.dp))
                                     Text(
                                         text = step.title,

@@ -650,9 +650,15 @@ class GeminiLiveVoiceEngine(
                     }
                 }
                 "place_phone_call" -> {
-                    val target = args.optString("contact_or_number", "")
+                    val target = args.optString("contact_or_number", "").trim()
                     if (callEngine != null && target.isNotBlank()) {
-                        val intent = callEngine.intentResolver.resolve(target)
+                        val isNum = com.lichiai.calling.contacts.PhoneNumberNormalizer.isDirectPhoneNumber(target)
+                        val intent = com.lichiai.calling.intent.CallIntent(
+                            action = if (isNum) com.lichiai.calling.intent.CallAction.CALL_NUMBER else com.lichiai.calling.intent.CallAction.CALL_CONTACT,
+                            targetText = target,
+                            phoneNumber = if (isNum) com.lichiai.calling.contacts.PhoneNumberNormalizer.normalize(target) else null,
+                            originalText = "Call $target"
+                        )
                         val outcome = callEngine.executeIntent(intent, sourceMode = "VOICE")
                         outcome.message
                     } else {

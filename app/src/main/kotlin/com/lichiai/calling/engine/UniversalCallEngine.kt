@@ -12,7 +12,6 @@ import com.lichiai.calling.contacts.ContactRepository
 import com.lichiai.calling.contacts.PhoneNumberNormalizer
 import com.lichiai.calling.intent.CallAction
 import com.lichiai.calling.intent.CallIntent
-import com.lichiai.calling.intent.CallIntentResolver
 import com.lichiai.calling.intent.CallResult
 import com.lichiai.calling.intent.CallResultStatus
 import com.lichiai.calling.permission.CallPermissionManager
@@ -28,7 +27,6 @@ class UniversalCallEngine(
     private val contactRepository: ContactRepository,
     private val diagnosticsRepository: CallDiagnosticsRepository
 ) {
-    val intentResolver = CallIntentResolver()
     private val targetSelector = CallTargetSelector()
 
     private val _activeDisambiguation = MutableStateFlow<List<ContactCandidate>?>(null)
@@ -60,24 +58,6 @@ class UniversalCallEngine(
             candidates = emptyList(),
             sourceMode = "DISAMBIGUATION"
         )
-    }
-
-    /**
-     * Central execution pipeline: processes natural language string from either Text Mode or Voice Mode.
-     */
-    suspend fun processNaturalLanguage(
-        input: String,
-        sourceMode: String = "TEXT"
-    ): CallResult = withContext(Dispatchers.IO) {
-        val intent = intentResolver.resolve(input)
-        if (intent.action == CallAction.NO_CALL_INTENT) {
-            return@withContext CallResult(
-                status = CallResultStatus.CALL_INTENT_NOT_FOUND,
-                message = "No calling intent detected."
-            )
-        }
-
-        executeIntent(intent, sourceMode)
     }
 
     /**

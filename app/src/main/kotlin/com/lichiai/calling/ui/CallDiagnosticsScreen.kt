@@ -163,7 +163,14 @@ fun CallDiagnosticsScreen(
                     onRunTest = {
                         isTesting = true
                         coroutineScope.launch {
-                            val intent = viewModel.universalCallEngine.intentResolver.resolve(testQuery)
+                            val trimmed = testQuery.trim()
+                            val isNumber = com.lichiai.calling.contacts.PhoneNumberNormalizer.isDirectPhoneNumber(trimmed)
+                            val intent = com.lichiai.calling.intent.CallIntent(
+                                action = if (isNumber) com.lichiai.calling.intent.CallAction.CALL_NUMBER else com.lichiai.calling.intent.CallAction.CALL_CONTACT,
+                                targetText = trimmed,
+                                phoneNumber = if (isNumber) com.lichiai.calling.contacts.PhoneNumberNormalizer.normalize(trimmed) else null,
+                                originalText = testQuery
+                            )
                             testResultIntent = intent
                             testResultCandidates = if (intent.targetText.isNotBlank()) {
                                 viewModel.contactRepository.searchContacts(intent.targetText)

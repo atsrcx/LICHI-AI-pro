@@ -199,101 +199,6 @@ class UniversalTaskOrchestratorV2Test {
     }
 
     @Test
-    fun testReferenceAndCorrectionContextFlow() {
-        val context = IntentContext(
-            lastExecutedCapability = LichiCapability.BROWSER,
-            browserCandidates = listOf("PUBG Mobile", "Krafton Store", "Download Game"),
-            currentBrowserUrl = "https://www.google.com/search?q=pubg"
-        )
-
-        val resolver = com.lichiai.intent.router.ReferenceAndCorrectionResolver
-        val secondResult = resolver.resolve("doosra result kholo", context)
-        assertNotNull(secondResult)
-        assertTrue(secondResult!!.first is ResolvedIntent.BrowserTask)
-        val bTask = secondResult.first as ResolvedIntent.BrowserTask
-        assertEquals(BrowserActionType.CLICK_CANDIDATE, bTask.action)
-        assertEquals(1, bTask.candidateIndex)
-
-        // Correction from web search to browser
-        val searchContext = IntentContext(
-            lastExecutedCapability = LichiCapability.WEB_SEARCH,
-            lastSearchQuery = "delhi weather"
-        )
-        val corrResult = resolver.resolve("nahi browser mein search karo", searchContext)
-        assertNotNull(corrResult)
-        assertTrue(corrResult!!.first is ResolvedIntent.BrowserTask)
-        val corrTask = corrResult.first as ResolvedIntent.BrowserTask
-        assertEquals(BrowserActionType.SEARCH, corrTask.action)
-        assertEquals("delhi weather", corrTask.query)
-
-        // Cancellation
-        val cancelResult = resolver.resolve("mat karo rehne do", context)
-        assertNotNull(cancelResult)
-        assertTrue(cancelResult!!.first is ResolvedIntent.Cancellation)
-    }
-
-    @Test
-    fun testCriticalE2ETest1_Hello_Chat() {
-        val router = com.lichiai.intent.router.SemanticRouter()
-        // "Hello" should not trigger device actions
-        val res = router.route("Hello")
-        // Not a browser, call, or agent action
-        assertTrue(res == null || res.first is ResolvedIntent.NormalChat)
-    }
-
-    @Test
-    fun testCriticalE2ETest2_GoogleKholo_Browser() {
-        val ruleRouter = com.lichiai.intent.router.DeterministicRuleRouter()
-        val res = ruleRouter.route("Google kholo")
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.BrowserTask)
-        val browserTask = res.first as ResolvedIntent.BrowserTask
-        assertEquals("https://www.google.com", browserTask.url)
-    }
-
-    @Test
-    fun testCriticalE2ETest3_LatestIPhonePrice_Web() {
-        val semanticRouter = com.lichiai.intent.router.SemanticRouter()
-        val res = semanticRouter.route("Latest iPhone price batao")
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.WebSearchTask)
-        val webTask = res.first as ResolvedIntent.WebSearchTask
-        assertTrue(webTask.query.contains("iphone") && webTask.query.contains("price"))
-    }
-
-    @Test
-    fun testCriticalE2ETest4_TerminalKholo_Terminal() {
-        val ruleRouter = com.lichiai.intent.router.DeterministicRuleRouter()
-        val res = ruleRouter.route("Terminal kholo")
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.TerminalTask)
-        val termTask = res.first as ResolvedIntent.TerminalTask
-        assertEquals("OPEN", termTask.action)
-    }
-
-    @Test
-    fun testCriticalE2ETest5_RahulKoCallKaro_Call() {
-        val ruleRouter = com.lichiai.intent.router.DeterministicRuleRouter()
-        val res = ruleRouter.route("Rahul ko call karo")
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.CallTask)
-        val callTask = res.first as ResolvedIntent.CallTask
-        assertEquals("Rahul", callTask.callIntent.targetText)
-    }
-
-    @Test
-    fun testCriticalE2ETest6_MultiStep_BrowserSearch() {
-        val semanticRouter = com.lichiai.intent.router.SemanticRouter()
-        val res = semanticRouter.route("Google pe PUBG search karo aur official website kholo")
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.MultiStepTask)
-        val multiTask = res.first as ResolvedIntent.MultiStepTask
-        assertEquals(2, multiTask.steps.size)
-        assertTrue(multiTask.steps[0] is ResolvedIntent.BrowserTask)
-        assertTrue(multiTask.steps[1] is ResolvedIntent.BrowserTask)
-    }
-
-    @Test
     fun testCriticalE2ETest7_ClosedLoopExecutionPlan() {
         val catalog = CapabilityCatalogV2(
             isAutonomousAgentEnabled = { true },
@@ -314,45 +219,6 @@ class UniversalTaskOrchestratorV2Test {
         assertEquals(LichiCapability.BROWSER, plan.steps[0].capability)
         assertEquals(LichiCapability.BROWSER, plan.steps[1].capability)
         assertEquals(LichiCapability.BROWSER, plan.steps[2].capability)
-    }
-
-    @Test
-    fun testCriticalE2ETest8_GoogleKholo_NahiChromeMein_Correction() {
-        val resolver = com.lichiai.intent.router.ReferenceAndCorrectionResolver
-        val ctx = IntentContext(
-            lastExecutedCapability = LichiCapability.BROWSER,
-            lastUserGoal = "Google kholo",
-            lastSearchQuery = "Google"
-        )
-        val res = resolver.resolve("Nahi Chrome mein.", ctx)
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.BrowserTask)
-        val browserTask = res.first as ResolvedIntent.BrowserTask
-        assertEquals(LichiCapability.BROWSER, browserTask.capability)
-    }
-
-    @Test
-    fun testCriticalE2ETest9_RahulKoCallKaro_Ruko_Cancellation() {
-        val resolver = com.lichiai.intent.router.ReferenceAndCorrectionResolver
-        val ctx = IntentContext(
-            lastExecutedCapability = LichiCapability.CALLS,
-            lastUserGoal = "Rahul ko call karo",
-            recentEntities = mapOf("contact" to "Rahul")
-        )
-        val res = resolver.resolve("Ruko.", ctx)
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.Cancellation)
-    }
-
-    @Test
-    fun testCriticalE2ETest10_ServerDiskUsageCheck_TerminalTask() {
-        val ruleRouter = com.lichiai.intent.router.DeterministicRuleRouter()
-        val res = ruleRouter.route("Server ki disk usage check karo")
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.TerminalTask)
-        val termTask = res.first as ResolvedIntent.TerminalTask
-        assertEquals("df -h", termTask.command)
-        assertEquals("EXECUTE", termTask.action)
     }
 
     @Test
@@ -388,8 +254,7 @@ class UniversalTaskOrchestratorV2Test {
     }
 
     @Test
-    fun testCriticalE2ETest12_ContinueThat_Resume() {
-        val resolver = com.lichiai.intent.router.ReferenceAndCorrectionResolver
+    fun testCriticalE2ETest12_ContextBuilderPausedTaskPop() {
         val contextBuilder = ContextBuilder()
         val pausedTask = TaskPlan(
             taskId = "task_paused_1",
@@ -401,41 +266,8 @@ class UniversalTaskOrchestratorV2Test {
         )
         contextBuilder.pushPausedTask(pausedTask)
 
-        val res = resolver.resolve("Continue that.", contextBuilder.contextState.value)
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.ResumeTask)
-
         val retrieved = contextBuilder.popPausedTask()
         assertNotNull(retrieved)
         assertEquals("task_paused_1", retrieved?.taskId)
-    }
-
-    @Test
-    fun testCriticalE2ETest13_DoosraResultKholo_ReferenceResolution() {
-        val resolver = com.lichiai.intent.router.ReferenceAndCorrectionResolver
-        val ctx = IntentContext(
-            lastExecutedCapability = LichiCapability.BROWSER,
-            browserCandidates = listOf("PUBG Mobile", "Krafton Battlegrounds", "Download APK")
-        )
-        val res = resolver.resolve("Doosra result kholo.", ctx)
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.BrowserTask)
-        val bTask = res.first as ResolvedIntent.BrowserTask
-        assertEquals(BrowserActionType.CLICK_CANDIDATE, bTask.action)
-        assertEquals(1, bTask.candidateIndex)
-    }
-
-    @Test
-    fun testCriticalE2ETest14_IskaMatlabKyaHai_ContextualQuestion() {
-        val resolver = com.lichiai.intent.router.ReferenceAndCorrectionResolver
-        val ctx = IntentContext(
-            lastExecutedCapability = LichiCapability.TERMINAL,
-            lastAssistantResponse = "Server ki root disk 61% full hai."
-        )
-        val res = resolver.resolve("Iska matlab kya hai?", ctx)
-        assertNotNull(res)
-        assertTrue(res!!.first is ResolvedIntent.ContextualQuestion)
-        val qTask = res.first as ResolvedIntent.ContextualQuestion
-        assertEquals("Server ki root disk 61% full hai.", qTask.referenceContext)
     }
 }

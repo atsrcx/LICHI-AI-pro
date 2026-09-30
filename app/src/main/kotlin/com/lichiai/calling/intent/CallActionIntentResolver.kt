@@ -10,8 +10,6 @@ import java.util.Locale
  */
 class CallActionIntentResolver {
 
-    private val callIntentResolver = CallIntentResolver()
-
     // Regex patterns for Call Handling Controls
     private val ANSWER_SPEAKER_PATTERNS = listOf(
         Regex("(?i)^(lichi\\s+)?(speaker|loudspeaker)\\s*pe\\s*(utha\\s*lo|uthao|answer|receive\\s*karo|receive\\s*kar\\s*lo|pick\\s*up|daal\\s*do)$"),
@@ -246,21 +244,6 @@ class CallActionIntentResolver {
             return StructuredCallAction.ResolveDisambiguation(text)
         }
 
-        // 15. Check Outgoing Dialing via CallIntentResolver
-        val legacyIntent = callIntentResolver.resolve(text)
-        return when (legacyIntent.action) {
-            CallAction.CALL_CONTACT -> {
-                if (legacyIntent.targetText.isNotBlank()) {
-                    StructuredCallAction.DialContact(legacyIntent.targetText, legacyIntent.simSlot)
-                } else null
-            }
-            CallAction.CALL_NUMBER -> {
-                val num = legacyIntent.phoneNumber?.takeIf { it.isNotBlank() } ?: legacyIntent.targetText
-                if (num.isNotBlank()) {
-                    StructuredCallAction.DialNumber(num, legacyIntent.simSlot)
-                } else null
-            }
-            else -> null
-        }
+        return null
     }
 }

@@ -57,7 +57,6 @@ class VoiceConversationOrchestrator(
     autonomousAgentTool: com.lichiai.agent.bridge.AutonomousAgentTool? = null,
     webIntelligenceManager: com.lichiai.web.WebIntelligenceManager? = null,
     private val onExecuteBrowserCommand: ((String) -> Unit)? = null,
-    private val universalIntentEngine: com.lichiai.intent.UniversalIntentEngine? = null,
     private val routeDispatcher: com.lichiai.intent.dispatcher.RouteDispatcher? = null,
     private val taskOrchestratorV2: com.lichiai.orchestrator.UniversalTaskOrchestratorV2? = null,
     providerStore: com.lichiai.data.ProviderStore? = null
@@ -409,68 +408,43 @@ class VoiceConversationOrchestrator(
             return
         }
 
-        // Check if user is issuing a structured call action (Answer, Reject, Mute, Speaker, Hold, End)
+        // 1. STATE-SPECIFIC PROTOCOL CONTROL: Real-time active-call session controls (Answer, Reject, Mute, Speaker, End)
         val currentCallSession = com.lichiai.dynamicisland.LichiAssistantStateHub.callSession.value
-        val structuredAction = callActionIntentResolver?.resolve(trimmed, currentCallSession)
-        if (structuredAction != null && callActionExecutor != null) {
-            orchestratorScope.launch {
-                _sessionState.update {
-                    it.copy(
-                        state = VoiceState.THINKING,
-                        partialUserText = trimmed,
-                        activeAssistantText = "Handling call..."
-                    )
+        if (currentCallSession != null && currentCallSession.isCallActiveOrRinging) {
+            val structuredAction = callActionIntentResolver?.resolve(trimmed, currentCallSession)
+            if (structuredAction != null && callActionExecutor != null) {
+                orchestratorScope.launch {
+                    _sessionState.update {
+                        it.copy(
+                            state = VoiceState.THINKING,
+                            partialUserText = trimmed,
+                            activeAssistantText = "Handling call..."
+                        )
+                    }
+                    val result = callActionExecutor.execute(structuredAction)
+                    val responseSpeech = result.message
+                    _sessionState.update {
+                        val turn = VoiceTurn(
+                            userText = trimmed,
+                            assistantText = responseSpeech,
+                            isUserFinal = true,
+                            isAssistantComplete = true
+                        )
+                        it.copy(
+                            state = VoiceState.SPEAKING,
+                            historyTurns = it.historyTurns + turn,
+                            activeAssistantText = responseSpeech
+                        )
+                    }
+                    saveTurnToConversation(userText = trimmed, assistantText = responseSpeech)
+                    ttsManager?.stopAndClearQueue()
+                    ttsManager?.enqueueSentence(responseSpeech)
                 }
-                val result = callActionExecutor.execute(structuredAction)
-                val responseSpeech = result.message
-                _sessionState.update {
-                    val turn = VoiceTurn(
-                        userText = trimmed,
-                        assistantText = responseSpeech,
-                        isUserFinal = true,
-                        isAssistantComplete = true
-                    )
-                    it.copy(
-                        state = VoiceState.SPEAKING,
-                        historyTurns = it.historyTurns + turn,
-                        activeAssistantText = responseSpeech
-                    )
-                }
-                saveTurnToConversation(userText = trimmed, assistantText = responseSpeech)
-                ttsManager?.stopAndClearQueue()
-                ttsManager?.enqueueSentence(responseSpeech)
+                return
             }
-            return
         }
 
-        // Fast-path zero-LLM Time Engine resolution (Alarms, Reminders, Routines, Tasks)
-        val timeParse = com.lichiai.time.parser.OfflineReminderIntentParser.parse(trimmed)
-        if (timeParse !is com.lichiai.time.parser.ParsedTimeAction.NotRecognized) {
-            orchestratorScope.launch {
-                val adapter = com.lichiai.time.adapter.TimeCapabilityAdapter(context)
-                val outcome = adapter.handleQuery(trimmed)
-                val responseSpeech = outcome.naturalSpeech
-                _sessionState.update {
-                    val turn = VoiceTurn(
-                        userText = trimmed,
-                        assistantText = responseSpeech,
-                        isUserFinal = true,
-                        isAssistantComplete = true
-                    )
-                    it.copy(
-                        state = VoiceState.SPEAKING,
-                        historyTurns = it.historyTurns + turn,
-                        activeAssistantText = responseSpeech
-                    )
-                }
-                saveTurnToConversation(userText = trimmed, assistantText = responseSpeech)
-                ttsManager?.stopAndClearQueue()
-                ttsManager?.enqueueSentence(responseSpeech)
-            }
-            return
-        }
-
-        // Universal Task Orchestrator V2 (Universal Task Understanding + Closed-Loop Feedback)
+        // 2. CANONICAL TASK ORCHESTRATION (UniversalLlmPlanner -> CapabilityCatalogV2 -> Executor)
         val orchestratorMode = runCatching {
             com.lichiai.orchestrator.model.OrchestratorMode.valueOf(currentAppSettings.orchestratorMode)
         }.getOrDefault(com.lichiai.orchestrator.model.OrchestratorMode.ENABLED)
@@ -535,366 +509,8 @@ class VoiceConversationOrchestrator(
             return
         }
 
-        // Universal Intent Engine routing (Rollback / Fallback path)
-        if (universalIntentEngine != null) {
-            orchestratorScope.launch {
-                val provider = activeProvider
-                val modelToUse = currentAppSettings.activeModel.ifBlank { provider?.models?.firstOrNull() ?: "gpt-4o-mini" }
-                val resolution = universalIntentEngine.resolve(
-                    rawInput = trimmed,
-                    provider = provider,
-                    modelId = modelToUse
-                )
-                when (val intent = resolution.intent) {
-                    is com.lichiai.intent.model.ResolvedIntent.CallTask -> {
-                        _sessionState.update {
-                            it.copy(
-                                state = VoiceState.THINKING,
-                                partialUserText = trimmed,
-                                activeAssistantText = "Placing call..."
-                            )
-                        }
-                        val outcome = callEngine?.executeIntent(intent.callIntent, sourceMode = "VOICE")
-                        val responseSpeech = outcome?.message ?: intent.naturalAcknowledgment
-                        _sessionState.update {
-                            val turn = VoiceTurn(
-                                userText = trimmed,
-                                assistantText = responseSpeech,
-                                isUserFinal = true,
-                                isAssistantComplete = true
-                            )
-                            it.copy(
-                                state = VoiceState.SPEAKING,
-                                historyTurns = it.historyTurns + turn,
-                                activeAssistantText = responseSpeech
-                            )
-                        }
-                        saveTurnToConversation(userText = trimmed, assistantText = responseSpeech)
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(responseSpeech)
-                        return@launch
-                    }
-                    is com.lichiai.intent.model.ResolvedIntent.BrowserTask -> {
-                        val ack = intent.naturalAcknowledgment
-                        _sessionState.update {
-                            val turn = VoiceTurn(
-                                userText = trimmed,
-                                assistantText = ack,
-                                isUserFinal = true,
-                                isAssistantComplete = true
-                            )
-                            it.copy(
-                                state = VoiceState.SPEAKING,
-                                historyTurns = it.historyTurns + turn,
-                                activeAssistantText = ack
-                            )
-                        }
-                        saveTurnToConversation(userText = trimmed, assistantText = ack)
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(ack)
-                        val queryToSearch = intent.query
-                        if (intent.action == com.lichiai.intent.model.BrowserActionType.SEARCH && !queryToSearch.isNullOrBlank()) {
-                            onExecuteBrowserCommand?.invoke("search on ${intent.searchEngine} for $queryToSearch")
-                        } else {
-                            onExecuteBrowserCommand?.invoke(intent.rawPrompt.ifBlank { trimmed })
-                        }
-                        return@launch
-                    }
-                    is com.lichiai.intent.model.ResolvedIntent.AndroidAgentTask -> {
-                        if (!agentTool.isEnabled()) {
-                            val disabledSpeech = "Autonomous Agent is disabled in Settings."
-                            _sessionState.update {
-                                val turn = VoiceTurn(userText = trimmed, assistantText = disabledSpeech, isUserFinal = true, isAssistantComplete = true)
-                                it.copy(state = VoiceState.SPEAKING, historyTurns = it.historyTurns + turn, activeAssistantText = disabledSpeech)
-                            }
-                            saveTurnToConversation(userText = trimmed, assistantText = disabledSpeech)
-                            ttsManager?.stopAndClearQueue()
-                            ttsManager?.enqueueSentence(disabledSpeech)
-                            return@launch
-                        }
-                        val ack = intent.naturalAcknowledgment
-                        _sessionState.update {
-                            val turn = VoiceTurn(userText = trimmed, assistantText = ack, isUserFinal = true, isAssistantComplete = false)
-                            it.copy(state = VoiceState.SPEAKING, historyTurns = it.historyTurns + turn, activeAssistantText = ack)
-                        }
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(ack)
-
-                        val agentResult = agentTool.execute(
-                            taskDescription = intent.goal,
-                            matchedSkills = intent.matchedSkills
-                        ) { step, total, statusText ->
-                            _sessionState.update {
-                                it.copy(activeAssistantText = "Step $step/$total: $statusText")
-                            }
-                        }
-
-                        val completionSpeech = if (agentResult.isSuccess) {
-                            agentResult.summary
-                        } else {
-                            "Agent stopped: ${agentResult.summary}"
-                        }
-                        _sessionState.update {
-                            val completedTurn = VoiceTurn(userText = trimmed, assistantText = completionSpeech, isUserFinal = true, isAssistantComplete = true)
-                            val currentTurns = if (it.historyTurns.isNotEmpty()) it.historyTurns.dropLast(1) else emptyList()
-                            it.copy(state = VoiceState.SPEAKING, historyTurns = currentTurns + completedTurn, activeAssistantText = completionSpeech)
-                        }
-                        saveTurnToConversation(userText = trimmed, assistantText = completionSpeech)
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(completionSpeech)
-                        return@launch
-                    }
-                    is com.lichiai.intent.model.ResolvedIntent.MediaTask -> {
-                        val ack = intent.naturalAcknowledgment
-                        _sessionState.update {
-                            val turn = VoiceTurn(userText = trimmed, assistantText = ack, isUserFinal = true, isAssistantComplete = true)
-                            it.copy(state = VoiceState.SPEAKING, historyTurns = it.historyTurns + turn, activeAssistantText = ack)
-                        }
-                        saveTurnToConversation(userText = trimmed, assistantText = ack)
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(ack)
-                        routeDispatcher?.dispatch(intent)
-                        return@launch
-                    }
-                    is com.lichiai.intent.model.ResolvedIntent.DeviceControlTask -> {
-                        val ack = intent.naturalAcknowledgment
-                        _sessionState.update {
-                            val turn = VoiceTurn(userText = trimmed, assistantText = ack, isUserFinal = true, isAssistantComplete = true)
-                            it.copy(state = VoiceState.SPEAKING, historyTurns = it.historyTurns + turn, activeAssistantText = ack)
-                        }
-                        saveTurnToConversation(userText = trimmed, assistantText = ack)
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(ack)
-                        routeDispatcher?.dispatch(intent)
-                        return@launch
-                    }
-                    is com.lichiai.intent.model.ResolvedIntent.MultiStepTask -> {
-                        val ack = intent.naturalAcknowledgment
-                        _sessionState.update {
-                            val turn = VoiceTurn(userText = trimmed, assistantText = ack, isUserFinal = true, isAssistantComplete = true)
-                            it.copy(state = VoiceState.SPEAKING, historyTurns = it.historyTurns + turn, activeAssistantText = ack)
-                        }
-                        saveTurnToConversation(userText = trimmed, assistantText = ack)
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(ack)
-                        routeDispatcher?.dispatch(intent)
-                        return@launch
-                    }
-                    is com.lichiai.intent.model.ResolvedIntent.Clarification -> {
-                        val q = intent.question
-                        _sessionState.update {
-                            val turn = VoiceTurn(userText = trimmed, assistantText = q, isUserFinal = true, isAssistantComplete = true)
-                            it.copy(state = VoiceState.SPEAKING, historyTurns = it.historyTurns + turn, activeAssistantText = q)
-                        }
-                        saveTurnToConversation(userText = trimmed, assistantText = q)
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(q)
-                        return@launch
-                    }
-                    is com.lichiai.intent.model.ResolvedIntent.Cancellation -> {
-                        val ack = intent.naturalAcknowledgment
-                        _sessionState.update {
-                            val turn = VoiceTurn(userText = trimmed, assistantText = ack, isUserFinal = true, isAssistantComplete = true)
-                            it.copy(state = VoiceState.SPEAKING, historyTurns = it.historyTurns + turn, activeAssistantText = ack)
-                        }
-                        saveTurnToConversation(userText = trimmed, assistantText = ack)
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(ack)
-                        return@launch
-                    }
-                    else -> {}
-                }
-            }
-        }
-
-        // Check if user is issuing a natural language phone call command
-        val callIntent = callEngine?.intentResolver?.resolve(trimmed)
-        if (callEngine != null && callIntent != null && (callIntent.action == CallAction.CALL_CONTACT || callIntent.action == CallAction.CALL_NUMBER)) {
-            orchestratorScope.launch {
-                _sessionState.update {
-                    it.copy(
-                        state = VoiceState.THINKING,
-                        partialUserText = trimmed,
-                        activeAssistantText = "Placing call..."
-                    )
-                }
-                val outcome = callEngine.executeIntent(callIntent, sourceMode = "VOICE")
-                val responseSpeech = outcome.message
-                _sessionState.update {
-                    val turn = VoiceTurn(
-                        userText = trimmed,
-                        assistantText = responseSpeech,
-                        isUserFinal = true,
-                        isAssistantComplete = true
-                    )
-                    it.copy(
-                        state = VoiceState.SPEAKING,
-                        historyTurns = it.historyTurns + turn,
-                        activeAssistantText = responseSpeech
-                    )
-                }
-                saveTurnToConversation(userText = trimmed, assistantText = responseSpeech)
-                ttsManager?.stopAndClearQueue()
-                ttsManager?.enqueueSentence(responseSpeech)
-            }
-            return
-        }
-
-        // Top-Level Intent Boundary: Check if user is requesting a Browser task
-        if (com.lichiai.browser.api.BrowserIntentBoundary.isBrowserIntent(trimmed)) {
-            orchestratorScope.launch {
-                val (_, naturalAck) = com.lichiai.browser.api.BrowserIntentBoundary.resolveIntent(trimmed)
-                _sessionState.update {
-                    val turn = VoiceTurn(
-                        userText = trimmed,
-                        assistantText = naturalAck,
-                        isUserFinal = true,
-                        isAssistantComplete = true
-                    )
-                    it.copy(
-                        state = VoiceState.SPEAKING,
-                        historyTurns = it.historyTurns + turn,
-                        activeAssistantText = naturalAck
-                    )
-                }
-                saveTurnToConversation(userText = trimmed, assistantText = naturalAck)
-                ttsManager?.stopAndClearQueue()
-                ttsManager?.enqueueSentence(naturalAck)
-                onExecuteBrowserCommand?.invoke(trimmed)
-            }
-            return
-        }
-
-        // Check if user is requesting an Autonomous Agent task (strict capability routing)
-        orchestratorScope.launch {
-            val provider = activeProvider
-            val modelToUse = currentAppSettings.activeModel.ifBlank { provider?.models?.firstOrNull() ?: "gpt-4o-mini" }
-            val routeDecision = com.lichiai.agent.routing.AgentCapabilityRouter.resolveRouting(
-                text = trimmed,
-                provider = provider,
-                modelId = modelToUse,
-                llmClient = llmClient,
-                availableSkills = skillRepository.skills.value
-            )
-
-            when (routeDecision) {
-                is com.lichiai.agent.routing.AgentRouteDecision.SkillManagement -> {
-                    val speechText = handleVoiceSkillManagement(routeDecision.request)
-                    _sessionState.update {
-                        val turn = VoiceTurn(
-                            userText = trimmed,
-                            assistantText = speechText,
-                            isUserFinal = true,
-                            isAssistantComplete = true
-                        )
-                        it.copy(
-                            state = VoiceState.SPEAKING,
-                            historyTurns = it.historyTurns + turn,
-                            activeAssistantText = speechText
-                        )
-                    }
-                    saveTurnToConversation(userText = trimmed, assistantText = speechText)
-                    ttsManager?.stopAndClearQueue()
-                    ttsManager?.enqueueSentence(speechText)
-                    return@launch
-                }
-                is com.lichiai.agent.routing.AgentRouteDecision.ClarificationNeeded -> {
-                    val q = routeDecision.question
-                    _sessionState.update {
-                        val turn = VoiceTurn(
-                            userText = trimmed,
-                            assistantText = q,
-                            isUserFinal = true,
-                            isAssistantComplete = true
-                        )
-                        it.copy(
-                            state = VoiceState.SPEAKING,
-                            historyTurns = it.historyTurns + turn,
-                            activeAssistantText = q
-                        )
-                    }
-                    saveTurnToConversation(userText = trimmed, assistantText = q)
-                    ttsManager?.stopAndClearQueue()
-                    ttsManager?.enqueueSentence(q)
-                    return@launch
-                }
-                is com.lichiai.agent.routing.AgentRouteDecision.AgentTask -> {
-                    if (!agentTool.isEnabled()) {
-                        val msg = "Autonomous Agent is currently disabled in Settings."
-                        _sessionState.update {
-                            val turn = VoiceTurn(
-                                userText = trimmed,
-                                assistantText = msg,
-                                isUserFinal = true,
-                                isAssistantComplete = true
-                            )
-                            it.copy(
-                                state = VoiceState.SPEAKING,
-                                historyTurns = it.historyTurns + turn,
-                                activeAssistantText = msg
-                            )
-                        }
-                        saveTurnToConversation(userText = trimmed, assistantText = msg)
-                        ttsManager?.stopAndClearQueue()
-                        ttsManager?.enqueueSentence(msg)
-                        return@launch
-                    }
-
-                    val ack = routeDecision.naturalAcknowledgment
-                    _sessionState.update {
-                        it.copy(
-                            state = VoiceState.THINKING,
-                            partialUserText = trimmed,
-                            activeAssistantText = ack
-                        )
-                    }
-                    ttsManager?.stopAndClearQueue()
-                    ttsManager?.enqueueSentence(ack)
-
-                    val result = agentTool.execute(routeDecision.fullGoalWithContext, routeDecision.matchedSkills) { step, total, statusText ->
-                        _sessionState.update {
-                            it.copy(activeAssistantText = "Step $step: $statusText")
-                        }
-                    }
-
-                    val speechText = if (result.isSuccess) {
-                        "Autonomous task completed. ${result.summary}"
-                    } else {
-                        "Autonomous task issue: ${result.summary}"
-                    }
-
-                    _sessionState.update {
-                        val turn = VoiceTurn(
-                            userText = trimmed,
-                            assistantText = speechText,
-                            isUserFinal = true,
-                            isAssistantComplete = true
-                        )
-                        it.copy(
-                            state = VoiceState.SPEAKING,
-                            historyTurns = it.historyTurns + turn,
-                            activeAssistantText = speechText
-                        )
-                    }
-                    saveTurnToConversation(userText = trimmed, assistantText = speechText)
-                    ttsManager?.stopAndClearQueue()
-                    ttsManager?.enqueueSentence(speechText)
-                    return@launch
-                }
-                is com.lichiai.agent.routing.AgentRouteDecision.NormalConversation -> {
-                    _sessionState.update {
-                        it.copy(
-                            state = VoiceState.THINKING,
-                            partialUserText = trimmed,
-                            activeAssistantText = ""
-                        )
-                    }
-                    // Process final turn with LLM
-                    processUserTurnWithLlm(trimmed)
-                }
-            }
-        }
-        return
+        // 3. Direct LLM fallback if orchestrator is not available
+        processUserTurnWithLlm(trimmed)
     }
 
     override fun onEndOfSpeech() {

@@ -82,4 +82,7 @@ data class CallSessionInfo(
 
     val isCallActiveOrRinging: Boolean
         get() = callState.isRinging || callState.isConnectedOrActive || callState.isOutgoing || callState == CallState.ANSWERING
+
+    val isActiveOrIncoming: Boolean
+        get() = isCallActiveOrRinging
 }

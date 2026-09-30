@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import com.lichiai.api.LlmClient
 import com.lichiai.data.ProviderConfig
-import com.lichiai.intent.UniversalIntentEngine
 import com.lichiai.intent.context.ContextBuilder
 import com.lichiai.intent.dispatcher.DispatchExecutionResult
 import com.lichiai.intent.dispatcher.RouteDispatcher
@@ -47,7 +46,8 @@ data class OrchestrationResult(
     val confirmationPrompt: String? = null,
     val isPaused: Boolean = false,
     val spyProfile: com.lichiai.spy.model.PlatformProfile? = null,
-    val spyProfiles: List<com.lichiai.spy.model.PlatformProfile> = emptyList()
+    val spyProfiles: List<com.lichiai.spy.model.PlatformProfile> = emptyList(),
+    val requiresLlmSynthesis: Boolean = false
 )
 
 typealias ConversationalAgentRuntime = UniversalTaskOrchestratorV2
@@ -56,19 +56,14 @@ typealias ConversationalAgentRuntime = UniversalTaskOrchestratorV2
  * Universal LLM Task Orchestrator V2 for Lichi AI.
  * Also known as ConversationalAgentRuntime.
  *
- * Semantic brain coordinating verified existing peer capabilities:
- * - Understands user goals across English, Hindi, Hinglish, Roman Hindi
- * - Performs multi-capability and same-capability task planning
- * - Coordinates existing executors (Browser Agent, Autonomous Agent V2, Web Intelligence, UniversalCallEngine, Terminal)
- * - Implements closed-loop result verification, task resumption, interruption, and feedback
- * - Supports SHADOW, CANARY, and ENABLED rollout modes with instant rollback
+ * Authoritative canonical task orchestration engine:
+ * USER INPUT -> UniversalLlmPlanner -> CapabilityCatalogV2 -> PlanStep -> RouteDispatcher (Executor) -> TaskResultEvaluator -> Result
  */
 class UniversalTaskOrchestratorV2(
     private val context: Context,
     private val capabilityCatalog: CapabilityCatalogV2,
     private val contextBuilder: ContextBuilder,
     private val routeDispatcher: RouteDispatcher,
-    private val legacyIntentEngine: UniversalIntentEngine,
     private val llmClient: LlmClient,
     private val shadowComparator: ShadowExecutionComparator = ShadowExecutionComparator(),
     private val loopGuard: OrchestratorLoopGuard = OrchestratorLoopGuard(),
@@ -139,141 +134,7 @@ class UniversalTaskOrchestratorV2(
             )
         }
 
-        // 1. FAST PATH: Deterministic URLs, Browser navigation, and Conversational Reference/Correction
-        val legacyResult = legacyIntentEngine.resolve(
-            rawInput = trimmed,
-            context = activeContext,
-            provider = provider,
-            modelId = modelId,
-            allowLlmFallback = false
-        )
-
-        // 1.1 Contextual Question (e.g. "iska matlab kya hai?", "is account ki specific cheezein batao", "iske followers kitne hain?")
-        if (legacyResult.intent is ResolvedIntent.ContextualQuestion) {
-            val q = legacyResult.intent.question
-            val ref = legacyResult.intent.referenceContext
-            val combinedPrompt = if (!ref.isNullOrBlank()) {
-                "User asks: \"$q\"\nRelevant Context / Previous Output: \"$ref\""
-            } else q
-            return@withContext OrchestrationResult(
-                finalSpeech = "",
-                isSuccess = true,
-                primaryCapability = LichiCapability.CHAT,
-                isDirectChat = true,
-                directChatPrompt = combinedPrompt,
-                spyProfile = activeContext.lastPlatformProfile,
-                spyProfiles = activeContext.recentProfiles
-            )
-        }
-
-        // 1.15 Clarification Request (e.g. multiple candidate profiles detected without qualifier)
-        if (legacyResult.intent is ResolvedIntent.Clarification) {
-            return@withContext OrchestrationResult(
-                finalSpeech = legacyResult.intent.question,
-                isSuccess = true,
-                primaryCapability = LichiCapability.CHAT
-            )
-        }
-
-        // 1.2 Resume Task ("continue", "resume", "continue that")
-        if (legacyResult.intent is ResolvedIntent.ResumeTask) {
-            val paused = contextBuilder.popPausedTask()
-            if (paused == null) {
-                return@withContext OrchestrationResult(
-                    finalSpeech = "Koi paused task nahi mila jise resume kiya ja sake.",
-                    isSuccess = true,
-                    primaryCapability = LichiCapability.CHAT
-                )
-            }
-            return@withContext resumePausedTask(paused, activeContext, provider, modelId, onProgress)
-        }
-
-        // 1.3 Task Interruption ("ruko, rahul ko call karo")
-        if (legacyResult.intent is ResolvedIntent.TaskInterruption) {
-            val active = contextBuilder.activeTaskPlan.value
-            if (active != null) {
-                contextBuilder.pushPausedTask(active)
-            }
-            val reason = legacyResult.intent.reason
-            val nextCommand = reason.removePrefix("User interrupted with:").trim()
-            if (nextCommand.isNotBlank()) {
-                return@withContext orchestrate(
-                    rawInput = nextCommand,
-                    context = activeContext,
-                    provider = provider,
-                    modelId = modelId,
-                    mode = mode,
-                    requestId = requestId,
-                    messageId = messageId,
-                    conversationId = conversationId,
-                    onProgress = onProgress
-                )
-            }
-        }
-
-        // 1.4 SPY FOLLOW-UP EXTERNAL RE-SCRAPING (Only when explicitly requesting new scrapes/posts/external data)
-        val lower = trimmed.lowercase(Locale.ROOT)
-        val isExplicitScrape = lower.contains("scrape") || lower.contains("fetch fresh") || lower.contains("fresh data") ||
-                lower.contains("phir se scrape") || lower.contains("dubara dhoondo")
-        if (isExplicitScrape && activeContext.lastPlatformProfile != null) {
-            val profile = activeContext.lastPlatformProfile
-            val platformName = profile.platform.displayName
-            val username = profile.username
-            val constructedQuery = "#Spy $platformName @$username $trimmed"
-
-            val appContext = this@UniversalTaskOrchestratorV2.context
-            val spyOrchestrator = com.lichiai.spy.orchestrator.SpyRuntimeOrchestrator(
-                context = appContext,
-                settingsRepository = com.lichiai.data.SettingsRepository(appContext),
-                llmClient = llmClient
-            )
-            val spyResult = spyOrchestrator.execute(
-                rawInput = constructedQuery,
-                provider = provider,
-                modelId = modelId,
-                requestId = requestId,
-                messageId = messageId,
-                onProgress = onProgress
-            )
-            contextBuilder.recordSpyExecution(spyResult.primaryProfile ?: profile, spyResult.profiles, trimmed, spyResult.speech)
-            return@withContext OrchestrationResult(
-                finalSpeech = spyResult.speech,
-                isSuccess = spyResult.isSuccess,
-                primaryCapability = LichiCapability.CHAT,
-                spyProfile = spyResult.primaryProfile ?: profile,
-                spyProfiles = spyResult.profiles.ifEmpty { activeContext.recentProfiles }
-            )
-        }
-
-        // If an active task was running and user gave a distinct command, pause it so it's recoverable
-        val activeRunningTask = contextBuilder.activeTaskPlan.value
-        if (activeRunningTask != null && legacyResult.intent !is ResolvedIntent.Cancellation) {
-            contextBuilder.pushPausedTask(activeRunningTask)
-        }
-
-        // If legacy route matched a deterministic high-confidence rule (e.g. direct URL or scroll/back/refresh)
-        if (legacyResult.source == com.lichiai.intent.model.ResolutionSource.DETERMINISTIC_RULE) {
-            Log.d(TAG, "Fast deterministic rule matched: ${legacyResult.intent::class.simpleName}")
-            val execResult = routeDispatcher.dispatch(legacyResult.intent, onProgress)
-            return@withContext buildResultFromDispatch(execResult, legacyResult.intent, trimmed)
-        }
-
-        // 2. High-priority context follow-up or correction (e.g. "doosra result kholo", "nahi browser mein karo", "chhodo")
-        if (legacyResult.source == com.lichiai.intent.model.ResolutionSource.CORRECTION ||
-            legacyResult.source == com.lichiai.intent.model.ResolutionSource.CONTEXT_FOLLOWUP
-        ) {
-            Log.d(TAG, "Contextual reference/correction matched: ${legacyResult.intent::class.simpleName}")
-            val execResult = routeDispatcher.dispatch(legacyResult.intent, onProgress)
-            return@withContext buildResultFromDispatch(execResult, legacyResult.intent, trimmed)
-        }
-
-        // 3. Mode check: If DISABLED, execute legacy path directly
-        if (mode == OrchestratorMode.DISABLED) {
-            val execResult = routeDispatcher.dispatch(legacyResult.intent, onProgress)
-            return@withContext buildResultFromDispatch(execResult, legacyResult.intent, trimmed)
-        }
-
-        // 4. Plan using Universal LLM Planner
+        // 1. CANONICAL PLANNING VIA UNIVERSAL LLM PLANNER
         val v2Decision = if (provider != null && !modelId.isNullOrBlank()) {
             planner.plan(
                 rawInput = trimmed,
@@ -284,30 +145,26 @@ class UniversalTaskOrchestratorV2(
             )
         } else null
 
-        // 5. SHADOW MODE: Compare decisions, execute ONLY legacy route (NO duplicate execution!)
-        if (mode == OrchestratorMode.SHADOW) {
-            if (v2Decision != null) {
-                shadowComparator.compare(trimmed, legacyResult.intent, v2Decision)
-            }
-            val execResult = routeDispatcher.dispatch(legacyResult.intent, onProgress)
-            return@withContext buildResultFromDispatch(execResult, legacyResult.intent, trimmed)
-        }
-
-        // 6. If V2 decision is null (e.g. offline/no API key), fall back gracefully to legacy router
+        // If planner returned null (e.g. offline / no provider credentials configured)
         if (v2Decision == null) {
-            Log.d(TAG, "Planner returned null; falling back to legacy intent engine.")
-            val execResult = routeDispatcher.dispatch(legacyResult.intent, onProgress)
-            return@withContext buildResultFromDispatch(execResult, legacyResult.intent, trimmed)
+            Log.d(TAG, "Planner returned null; falling back to direct conversation.")
+            return@withContext OrchestrationResult(
+                finalSpeech = "",
+                isSuccess = true,
+                primaryCapability = LichiCapability.CHAT,
+                isDirectChat = true,
+                directChatPrompt = trimmed
+            )
         }
 
-        // 7. Handle non-execution modes
+        // 2. Handle non-execution modes
         when (v2Decision.mode) {
             DecisionMode.CONVERSE -> {
                 return@withContext OrchestrationResult(
-                    finalSpeech = "",
+                    finalSpeech = v2Decision.directResponseText ?: "",
                     isSuccess = true,
                     primaryCapability = LichiCapability.CHAT,
-                    isDirectChat = true,
+                    isDirectChat = v2Decision.directResponseText.isNullOrBlank(),
                     directChatPrompt = trimmed
                 )
             }
@@ -368,7 +225,7 @@ class UniversalTaskOrchestratorV2(
             }
         }
 
-        // 8. CLOSED-LOOP PLAN EXECUTION
+        // 3. CLOSED-LOOP PLAN EXECUTION
         val taskPlan = TaskPlan(
             taskId = UUID.randomUUID().toString(),
             conversationId = conversationId,
@@ -405,10 +262,19 @@ class UniversalTaskOrchestratorV2(
                 onProgress?.invoke(idx + 1, totalSteps, txt)
             }
 
+            var stepExtractedAnswer: String? = null
+
             val (isSuccess, summary) = when (dispatchResult) {
-                is DispatchExecutionResult.BrowserExecuted -> Pair(true, dispatchResult.message)
+                is DispatchExecutionResult.BrowserExecuted -> {
+                    stepExtractedAnswer = dispatchResult.extractedAnswer
+                    if (dispatchResult.extractedContext != null) {
+                        lastWebContextPrompt = dispatchResult.extractedContext
+                    }
+                    Pair(dispatchResult.isSuccess, dispatchResult.extractedAnswer ?: dispatchResult.message)
+                }
                 is DispatchExecutionResult.WebSearchExecuted -> {
                     lastWebContextPrompt = dispatchResult.contextPrompt
+                    stepExtractedAnswer = dispatchResult.response.directAnswer
                     Pair(true, dispatchResult.message)
                 }
                 is DispatchExecutionResult.AndroidAgentExecuted -> Pair(dispatchResult.isSuccess, dispatchResult.summary)
@@ -433,7 +299,7 @@ class UniversalTaskOrchestratorV2(
             val hasMore = idx + 1 < totalSteps
             val nextStep = if (hasMore) taskPlan.steps[idx + 1] else null
 
-            // 9. Closed-Loop Result Evaluation
+            // 4. Closed-Loop Result Evaluation
             val evaluation = evaluator.evaluateStepResult(
                 userGoal = v2Decision.goal,
                 executedStep = step,
@@ -453,14 +319,16 @@ class UniversalTaskOrchestratorV2(
                 EvaluationAction.COMPLETE -> {
                     // Task satisfied!
                     contextBuilder.setActiveTask(null)
+                    val verifiedSpeech = stepExtractedAnswer ?: evaluation.verifiedResponse
                     contextBuilder.recordExecution(
                         capability = step.capability,
                         userGoal = v2Decision.goal,
-                        assistantResponse = evaluation.verifiedResponse,
+                        assistantResponse = verifiedSpeech,
                         actionType = step.action
                     )
+                    val requiresLlm = lastWebContextPrompt != null && stepExtractedAnswer == null
                     return@withContext OrchestrationResult(
-                        finalSpeech = evaluation.verifiedResponse,
+                        finalSpeech = verifiedSpeech,
                         isSuccess = true,
                         executedPlan = taskPlan.copy(
                             executionRecords = executedRecords,
@@ -470,7 +338,8 @@ class UniversalTaskOrchestratorV2(
                         ),
                         primaryCapability = taskPlan.steps.first().capability,
                         webContextPrompt = lastWebContextPrompt,
-                        requiresBrowserUi = requiresBrowserUi
+                        requiresBrowserUi = requiresBrowserUi,
+                        requiresLlmSynthesis = requiresLlm
                     )
                 }
                 EvaluationAction.ABORT, EvaluationAction.RETRY, EvaluationAction.RECOVER -> {
@@ -495,6 +364,7 @@ class UniversalTaskOrchestratorV2(
 
         contextBuilder.setActiveTask(null)
         val finalSummary = executedRecords.lastOrNull()?.outputSummary ?: v2Decision.naturalAcknowledgment
+        val requiresLlm = lastWebContextPrompt != null
         return@withContext OrchestrationResult(
             finalSpeech = finalSummary,
             isSuccess = executedRecords.all { it.isSuccess },
@@ -506,7 +376,8 @@ class UniversalTaskOrchestratorV2(
             ),
             primaryCapability = taskPlan.steps.firstOrNull()?.capability ?: LichiCapability.CHAT,
             webContextPrompt = lastWebContextPrompt,
-            requiresBrowserUi = requiresBrowserUi
+            requiresBrowserUi = requiresBrowserUi,
+            requiresLlmSynthesis = requiresLlm
         )
     }
 
@@ -518,15 +389,21 @@ class UniversalTaskOrchestratorV2(
         onProgress: ((step: Int, total: Int, text: String) -> Unit)?
     ): OrchestrationResult {
         onProgress?.invoke(pausedTask.currentStepIndex + 1, pausedTask.steps.size, "Resuming ${pausedTask.userGoal}...")
-        contextBuilder.setActiveTask(pausedTask.copy(taskState = TaskState.RUNNING))
 
+        loopGuard.reset()
         val executedRecords = pausedTask.executionRecords.toMutableList()
-        val totalSteps = pausedTask.steps.size
         var lastWebContextPrompt: String? = null
         var requiresBrowserUi = false
 
+        val totalSteps = pausedTask.steps.size
         for (idx in pausedTask.currentStepIndex until totalSteps) {
             val step = pausedTask.steps[idx]
+            if (!loopGuard.canExecuteStep(step, activeContext.currentBrowserUrl ?: "")) {
+                Log.w(TAG, "LoopGuard triggered on resumption for step ${idx + 1}. Aborting.")
+                break
+            }
+            loopGuard.recordStep(step, activeContext.currentBrowserUrl ?: "")
+
             onProgress?.invoke(idx + 1, totalSteps, "Executing ${step.capability.displayName}...")
 
             val resolvedIntent = mapStepToResolvedIntent(step, pausedTask.userGoal)
@@ -538,10 +415,19 @@ class UniversalTaskOrchestratorV2(
                 onProgress?.invoke(idx + 1, totalSteps, txt)
             }
 
+            var stepExtractedAnswer: String? = null
+
             val (isSuccess, summary) = when (dispatchResult) {
-                is DispatchExecutionResult.BrowserExecuted -> Pair(true, dispatchResult.message)
+                is DispatchExecutionResult.BrowserExecuted -> {
+                    stepExtractedAnswer = dispatchResult.extractedAnswer
+                    if (dispatchResult.extractedContext != null) {
+                        lastWebContextPrompt = dispatchResult.extractedContext
+                    }
+                    Pair(dispatchResult.isSuccess, dispatchResult.extractedAnswer ?: dispatchResult.message)
+                }
                 is DispatchExecutionResult.WebSearchExecuted -> {
                     lastWebContextPrompt = dispatchResult.contextPrompt
+                    stepExtractedAnswer = dispatchResult.response.directAnswer
                     Pair(true, dispatchResult.message)
                 }
                 is DispatchExecutionResult.AndroidAgentExecuted -> Pair(dispatchResult.isSuccess, dispatchResult.summary)
@@ -581,14 +467,16 @@ class UniversalTaskOrchestratorV2(
                 EvaluationAction.NEXT_STEP -> continue
                 EvaluationAction.COMPLETE -> {
                     contextBuilder.setActiveTask(null)
+                    val verifiedSpeech = stepExtractedAnswer ?: evaluation.verifiedResponse
                     contextBuilder.recordExecution(
                         capability = step.capability,
                         userGoal = pausedTask.userGoal,
-                        assistantResponse = evaluation.verifiedResponse,
+                        assistantResponse = verifiedSpeech,
                         actionType = step.action
                     )
+                    val requiresLlm = lastWebContextPrompt != null && stepExtractedAnswer == null
                     return OrchestrationResult(
-                        finalSpeech = evaluation.verifiedResponse,
+                        finalSpeech = verifiedSpeech,
                         isSuccess = true,
                         executedPlan = pausedTask.copy(
                             executionRecords = executedRecords,
@@ -598,7 +486,8 @@ class UniversalTaskOrchestratorV2(
                         ),
                         primaryCapability = pausedTask.steps.first().capability,
                         webContextPrompt = lastWebContextPrompt,
-                        requiresBrowserUi = requiresBrowserUi
+                        requiresBrowserUi = requiresBrowserUi,
+                        requiresLlmSynthesis = requiresLlm
                     )
                 }
                 EvaluationAction.ABORT, EvaluationAction.RETRY, EvaluationAction.RECOVER -> {
@@ -622,6 +511,7 @@ class UniversalTaskOrchestratorV2(
 
         contextBuilder.setActiveTask(null)
         val finalSummary = executedRecords.lastOrNull()?.outputSummary ?: "Task resumed and completed."
+        val requiresLlm = lastWebContextPrompt != null
         return OrchestrationResult(
             finalSpeech = finalSummary,
             isSuccess = executedRecords.all { it.isSuccess },
@@ -633,80 +523,35 @@ class UniversalTaskOrchestratorV2(
             ),
             primaryCapability = pausedTask.steps.firstOrNull()?.capability ?: LichiCapability.CHAT,
             webContextPrompt = lastWebContextPrompt,
-            requiresBrowserUi = requiresBrowserUi
+            requiresBrowserUi = requiresBrowserUi,
+            requiresLlmSynthesis = requiresLlm
         )
     }
 
-    private fun buildResultFromDispatch(
-        result: DispatchExecutionResult,
-        intent: ResolvedIntent,
-        rawInput: String
-    ): OrchestrationResult {
-        return when (result) {
-            is DispatchExecutionResult.BrowserExecuted -> OrchestrationResult(
-                finalSpeech = result.message,
-                isSuccess = true,
-                primaryCapability = LichiCapability.BROWSER,
-                requiresBrowserUi = true
-            )
-            is DispatchExecutionResult.WebSearchExecuted -> OrchestrationResult(
-                finalSpeech = result.message,
-                isSuccess = true,
-                primaryCapability = LichiCapability.WEB_SEARCH,
-                webContextPrompt = result.contextPrompt
-            )
-            is DispatchExecutionResult.AndroidAgentExecuted -> OrchestrationResult(
-                finalSpeech = result.summary,
-                isSuccess = result.isSuccess,
-                primaryCapability = LichiCapability.ANDROID_AGENT
-            )
-            is DispatchExecutionResult.CallExecuted -> OrchestrationResult(
-                finalSpeech = result.message,
-                isSuccess = result.isSuccess,
-                primaryCapability = LichiCapability.CALLS
-            )
-            is DispatchExecutionResult.MediaExecuted -> OrchestrationResult(
-                finalSpeech = result.message,
-                isSuccess = true,
-                primaryCapability = LichiCapability.MEDIA_YOUTUBE
-            )
-            is DispatchExecutionResult.DeviceControlExecuted -> OrchestrationResult(
-                finalSpeech = result.message,
-                isSuccess = true,
-                primaryCapability = LichiCapability.DEVICE_CONTROL
-            )
-            is DispatchExecutionResult.TimeReminderExecuted -> OrchestrationResult(
-                finalSpeech = result.message,
-                isSuccess = result.isSuccess,
-                primaryCapability = LichiCapability.TIME_REMINDER
-            )
-            is DispatchExecutionResult.TerminalExecuted -> OrchestrationResult(
-                finalSpeech = result.message,
-                isSuccess = result.isSuccess,
-                primaryCapability = LichiCapability.TERMINAL,
-                requiresBrowserUi = false
-            )
-            is DispatchExecutionResult.ClarificationNeeded -> OrchestrationResult(
-                finalSpeech = result.question,
-                isSuccess = true,
-                primaryCapability = LichiCapability.CHAT
-            )
-            is DispatchExecutionResult.FallbackChat -> OrchestrationResult(
-                finalSpeech = "",
-                isSuccess = true,
-                primaryCapability = LichiCapability.CHAT,
-                isDirectChat = true,
-                directChatPrompt = rawInput
-            )
-            is DispatchExecutionResult.ExecutionFailed -> OrchestrationResult(
-                finalSpeech = "⚠️ ${result.error}",
-                isSuccess = false,
-                primaryCapability = intent.capability
-            )
+    private fun generateStepAcknowledgment(step: PlanStep, userGoal: String): String {
+        return when (step.capability) {
+            LichiCapability.WEB_SEARCH -> "Searching the web for \"${step.arguments["query"] ?: userGoal}\"..."
+            LichiCapability.BROWSER -> "Opening browser for ${step.arguments["query"] ?: userGoal}..."
+            LichiCapability.ANDROID_AGENT -> "Executing device task: ${step.arguments["task"] ?: userGoal}..."
+            LichiCapability.CALLS -> "Calling ${step.arguments["target"] ?: step.arguments["contact"] ?: userGoal}..."
+            LichiCapability.MEDIA_YOUTUBE -> "Playing ${step.arguments["query"] ?: userGoal} on YouTube..."
+            LichiCapability.DEVICE_CONTROL -> "Adjusting device setting..."
+            LichiCapability.TIME_REMINDER -> "Setting reminder..."
+            LichiCapability.TERMINAL -> "Executing terminal command..."
+            LichiCapability.DORK_SEARCH, LichiCapability.SITE_SEARCH, LichiCapability.DEEP_SEARCH, LichiCapability.RESEARCH, LichiCapability.COMPARE, LichiCapability.VERIFY ->
+                "Gathering web research..."
+            LichiCapability.NAVIGATE -> "Navigating to ${step.arguments["url"] ?: "website"}..."
+            LichiCapability.EXTRACT, LichiCapability.FIND_ON_PAGE, LichiCapability.PAGE_SUMMARY, LichiCapability.INSPECT_PAGE ->
+                "Inspecting page..."
+            LichiCapability.FORMS, LichiCapability.DOWNLOAD, LichiCapability.UPLOAD, LichiCapability.MULTI_TAB ->
+                "Executing browser action..."
+            LichiCapability.SKILL_MANAGEMENT -> "Managing skills..."
+            LichiCapability.CHAT -> ""
         }
     }
 
     private fun mapStepToResolvedIntent(step: PlanStep, userGoal: String): ResolvedIntent {
+        val ack = generateStepAcknowledgment(step, userGoal)
         return when (step.capability) {
             LichiCapability.BROWSER -> {
                 val action = when (step.action.uppercase(Locale.ROOT)) {
@@ -730,7 +575,7 @@ class UniversalTaskOrchestratorV2(
                     candidateIndex = step.arguments["index"]?.toIntOrNull(),
                     findTarget = step.arguments["target"],
                     rawPrompt = userGoal,
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.WEB_SEARCH -> {
@@ -738,14 +583,14 @@ class UniversalTaskOrchestratorV2(
                     query = step.arguments["query"] ?: userGoal,
                     isNewsSearch = step.arguments["news"]?.equals("true", true) == true,
                     isImageSearch = step.arguments["images"]?.equals("true", true) == true,
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.ANDROID_AGENT -> {
                 ResolvedIntent.AndroidAgentTask(
                     goal = step.arguments["task"] ?: userGoal,
                     targetApp = step.arguments["app"],
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.CALLS -> {
@@ -756,27 +601,38 @@ class UniversalTaskOrchestratorV2(
                         targetText = contact,
                         originalText = userGoal
                     ),
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.MEDIA_YOUTUBE -> {
                 ResolvedIntent.MediaTask(
                     query = step.arguments["query"] ?: userGoal,
                     targetApp = step.arguments["app"] ?: "youtube",
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.DEVICE_CONTROL -> {
                 ResolvedIntent.DeviceControlTask(
                     setting = com.lichiai.intent.model.DeviceSettingType.VOLUME,
                     action = com.lichiai.intent.model.DeviceActionType.INCREASE,
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.TIME_REMINDER -> {
+                val action = step.action.ifBlank { "CREATE" }
+                val title = step.arguments["title"] ?: step.arguments["task"] ?: userGoal
+                val isAlarm = step.arguments["is_alarm"]?.equals("true", true) == true ||
+                        step.arguments["type"]?.equals("alarm", true) == true
                 ResolvedIntent.TimeReminderTask(
-                    rawInput = step.arguments["query"] ?: userGoal,
-                    naturalAcknowledgment = step.expectedOutcome
+                    rawInput = step.arguments["input"] ?: step.arguments["query"] ?: userGoal,
+                    action = action,
+                    title = title,
+                    time = step.arguments["time"],
+                    isAlarm = isAlarm,
+                    recurrence = step.arguments["recurrence"],
+                    id = step.arguments["id"],
+                    minutes = step.arguments["minutes"]?.toIntOrNull() ?: 10,
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.TERMINAL -> {
@@ -787,7 +643,7 @@ class UniversalTaskOrchestratorV2(
                     user = step.arguments["user"],
                     port = step.arguments["port"]?.toIntOrNull() ?: 22,
                     rawPrompt = userGoal,
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.DORK_SEARCH -> {
@@ -796,7 +652,7 @@ class UniversalTaskOrchestratorV2(
                     site = step.arguments["site"],
                     fileType = step.arguments["fileType"],
                     exactPhrase = step.arguments["exactPhrase"],
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.SITE_SEARCH -> {
@@ -804,40 +660,40 @@ class UniversalTaskOrchestratorV2(
                     domain = step.arguments["domain"] ?: "developer.android.com",
                     query = step.arguments["query"] ?: userGoal,
                     maxPages = step.arguments["maxPages"]?.toIntOrNull() ?: 3,
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.DEEP_SEARCH -> {
                 ResolvedIntent.DeepSearchTask(
                     query = step.arguments["query"] ?: userGoal,
                     maxBudgetQueries = step.arguments["maxBudget"]?.toIntOrNull() ?: 3,
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.RESEARCH -> {
                 ResolvedIntent.ResearchTask(
                     topic = step.arguments["topic"] ?: userGoal,
                     queries = step.arguments["queries"]?.split(";")?.map { it.trim() } ?: emptyList(),
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.NAVIGATE -> {
                 ResolvedIntent.NavigateTask(
                     url = step.arguments["url"] ?: "https://www.google.com",
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.EXTRACT -> {
                 ResolvedIntent.ExtractTask(
                     target = step.arguments["target"] ?: "ALL",
                     url = step.arguments["url"],
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.FIND_ON_PAGE -> {
                 ResolvedIntent.FindOnPageTask(
                     keyword = step.arguments["keyword"] ?: userGoal,
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.COMPARE -> {
@@ -846,64 +702,73 @@ class UniversalTaskOrchestratorV2(
                 ResolvedIntent.CompareTask(
                     entities = entitiesList,
                     criteria = step.arguments["criteria"]?.split(";")?.map { it.trim() } ?: emptyList(),
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.VERIFY -> {
                 ResolvedIntent.VerifyTask(
                     claim = step.arguments["claim"] ?: userGoal,
                     domain = step.arguments["domain"],
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.FORMS -> {
-                val fields = step.arguments.filterKeys { it != "submit" }
+                val fields = step.arguments["fields"]?.split(";")?.associate {
+                    val parts = it.split(":")
+                    if (parts.size >= 2) parts[0].trim() to parts[1].trim() else it to ""
+                } ?: emptyMap()
                 ResolvedIntent.FormsTask(
                     fieldValues = fields,
-                    submit = step.arguments["submit"]?.toBooleanStrictOrNull() ?: true,
-                    naturalAcknowledgment = step.expectedOutcome
+                    submit = step.arguments["submit"]?.equals("true", true) ?: true,
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.DOWNLOAD -> {
                 ResolvedIntent.DownloadTask(
-                    url = step.arguments["url"] ?: "about:blank",
-                    naturalAcknowledgment = step.expectedOutcome
+                    url = step.arguments["url"] ?: "https://example.com",
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.UPLOAD -> {
                 ResolvedIntent.UploadTask(
-                    targetIdOrIndex = step.arguments["targetId"] ?: "1",
+                    targetIdOrIndex = step.arguments["targetId"] ?: "0",
                     filePath = step.arguments["filePath"] ?: "",
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.MULTI_TAB -> {
                 ResolvedIntent.MultiTabTask(
-                    action = step.arguments["action"] ?: "LIST",
+                    action = step.arguments["action"] ?: "OPEN",
                     tabId = step.arguments["tabId"],
                     url = step.arguments["url"],
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.PAGE_SUMMARY -> {
                 ResolvedIntent.PageSummaryTask(
                     focus = step.arguments["focus"],
-                    naturalAcknowledgment = step.expectedOutcome
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.INSPECT_PAGE -> {
                 ResolvedIntent.InspectTask(
                     mode = step.arguments["mode"] ?: "FULL_INSPECTION",
                     query = step.arguments["query"] ?: userGoal,
-                    showUi = step.arguments["showUi"]?.toBooleanStrictOrNull() ?: false,
-                    naturalAcknowledgment = step.expectedOutcome
+                    showUi = step.arguments["showUi"]?.equals("true", true) ?: false,
+                    naturalAcknowledgment = ack
                 )
             }
             LichiCapability.SKILL_MANAGEMENT -> {
-                ResolvedIntent.NormalChat(prompt = userGoal, naturalAcknowledgment = step.expectedOutcome)
+                ResolvedIntent.SkillManagementTask(
+                    request = com.lichiai.skill.router.SkillManagementRequest.ListSkills,
+                    naturalAcknowledgment = ack
+                )
             }
             LichiCapability.CHAT -> {
-                ResolvedIntent.NormalChat(prompt = userGoal, naturalAcknowledgment = "")
+                ResolvedIntent.NormalChat(
+                    prompt = userGoal,
+                    naturalAcknowledgment = ack
+                )
             }
         }
     }
