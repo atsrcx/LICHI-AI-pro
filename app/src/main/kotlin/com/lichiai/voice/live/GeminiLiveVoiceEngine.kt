@@ -53,6 +53,7 @@ class GeminiLiveVoiceEngine(
     private val callActionExecutor: com.lichiai.calling.action.CallActionExecutor? = null,
     private val callActionIntentResolver: com.lichiai.calling.intent.CallActionIntentResolver? = null,
     private val taskOrchestratorV2: UniversalTaskOrchestratorV2? = null,
+    private val onShowBrowserUi: (() -> Unit)? = null,
     private val onExecuteBrowserCommand: ((String) -> Unit)? = null,
     private val onSaveTurn: (suspend (String, String) -> Unit)? = null
 ) {
@@ -678,10 +679,22 @@ class GeminiLiveVoiceEngine(
                 "browse_website" -> {
                     val target = args.optString("query_or_url", "")
                     if (target.isNotBlank()) {
-                        withContext(Dispatchers.Main) {
-                            onExecuteBrowserCommand?.invoke(target)
+                        val browserTool = taskOrchestratorV2?.toolRegistry?.getTool("browser.open")
+                        if (browserTool != null) {
+                            val res = browserTool.execute(
+                                com.lichiai.toolruntime.model.ToolCall(toolId = "browser.open", arguments = mapOf("url" to target)),
+                                com.lichiai.toolruntime.model.ToolExecutionContext(userGoal = "Open $target")
+                            )
+                            withContext(Dispatchers.Main) {
+                                onShowBrowserUi?.invoke() ?: onExecuteBrowserCommand?.invoke("")
+                            }
+                            res.outputSummary
+                        } else {
+                            withContext(Dispatchers.Main) {
+                                onShowBrowserUi?.invoke() ?: onExecuteBrowserCommand?.invoke(target)
+                            }
+                            "Opened $target in the browser."
                         }
-                        "Opened $target in the browser."
                     } else {
                         "Error: Target URL or query empty."
                     }

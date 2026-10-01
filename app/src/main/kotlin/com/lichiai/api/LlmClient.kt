@@ -80,7 +80,7 @@ private data class ModelEntry(val id: String)
 @Serializable
 private data class ModelsResponse(val data: List<ModelEntry> = emptyList())
 
-class LlmClient {
+open class LlmClient {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = false }
 
     private val client = HttpClient(OkHttp) {
@@ -225,7 +225,7 @@ class LlmClient {
         }
     }
 
-    suspend fun chatCompletion(
+    open suspend fun chatCompletion(
         provider: ProviderConfig,
         modelId: String,
         messages: List<ChatMessage>,

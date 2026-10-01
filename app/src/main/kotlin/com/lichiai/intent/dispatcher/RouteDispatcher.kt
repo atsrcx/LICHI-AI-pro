@@ -41,14 +41,14 @@ sealed class DispatchExecutionResult {
  * It strictly dispatches structured requests (ResolvedIntent) to verified isolated peer capability executors.
  */
 class RouteDispatcher(
-    private val context: Context,
-    private val browserController: BrowserController,
-    private val webIntelligenceManager: WebIntelligenceManager,
-    private val autonomousAgentTool: AutonomousAgentTool,
-    private val universalCallEngine: UniversalCallEngine,
-    private val contextBuilder: ContextBuilder,
-    private val onNavigateToBrowser: () -> Unit,
-    private val onNavigateToTerminal: () -> Unit = {}
+    val context: Context,
+    val browserController: BrowserController,
+    val webIntelligenceManager: WebIntelligenceManager,
+    val autonomousAgentTool: AutonomousAgentTool,
+    val universalCallEngine: UniversalCallEngine,
+    val contextBuilder: ContextBuilder,
+    val onNavigateToBrowser: () -> Unit,
+    val onNavigateToTerminal: () -> Unit = {}
 ) {
     val browserPlatform = com.lichiai.browser.BrowserIntelligencePlatform(
         context = context,

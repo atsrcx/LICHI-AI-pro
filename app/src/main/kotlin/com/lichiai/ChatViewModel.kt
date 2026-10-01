@@ -108,7 +108,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         capabilityCatalog = capabilityCatalogV2,
         contextBuilder = intentContextBuilder,
         routeDispatcher = routeDispatcher,
-        llmClient = client
+        llmClient = client,
+        callActionExecutor = callActionExecutor
     )
 
     private val _activeId = MutableStateFlow<String?>(null)
@@ -126,9 +127,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         activeConversationIdProvider = { _activeId.value },
         onConversationIdChanged = { id -> _activeId.value = id },
         webIntelligenceManager = webIntelligenceManager,
-        onExecuteBrowserCommand = { command ->
+        onShowBrowserUi = {
             _browserNavigationEvent.tryEmit(Unit)
-            browserController.agent.submitInstruction(command)
         },
         routeDispatcher = routeDispatcher,
         taskOrchestratorV2 = taskOrchestratorV2,
@@ -625,8 +625,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (orchResult.directChatPrompt.isNotBlank() && orchResult.directChatPrompt != trimmed) {
                         webSearchOverridePrompt = orchResult.directChatPrompt
                     }
-                } else if (orchResult.webContextPrompt != null || orchResult.requiresLlmSynthesis) {
-                    // Search or Information Task: Web context produced and ready for LLM synthesis!
+                } else if (orchResult.requiresLlmSynthesis && !orchResult.webContextPrompt.isNullOrBlank()) {
+                    // Search or Information Task: Web context produced and explicitly requires LLM synthesis!
                     webSearchOverridePrompt = orchResult.webContextPrompt ?: ""
                     val allCompletedSteps = stepsList.map { it.copy(isCompleted = true) }
                     stepsList.clear()
@@ -636,11 +636,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         _browserNavigationEvent.emit(Unit)
                     }
                 } else {
-                    // Action-only Task Complete: Call, Volume, Media, Terminal, Alarm, etc.
+                    // Task Complete: Grounded answer from Central Brain (Web Search, Browser, Call, Volume, Terminal, Alarm, etc.)
                     _liveActivityState.value = null
                     _isStreaming.value = false
 
                     val iconPrefix = when (orchResult.primaryCapability) {
+                        com.lichiai.intent.model.LichiCapability.WEB_SEARCH -> "🔍 "
                         com.lichiai.intent.model.LichiCapability.BROWSER -> "🌐 "
                         com.lichiai.intent.model.LichiCapability.ANDROID_AGENT -> "🤖 "
                         com.lichiai.intent.model.LichiCapability.CALLS -> "📞 "
@@ -715,26 +716,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
             val temperature = activeAsstProfile.temperatureOverride ?: current.temperature
 
-            // Check Web Search Intent & Retrieve Real-time Data
-            var webContextPrompt = webSearchOverridePrompt
-            var capturedWebActivity: com.lichiai.web.model.WebActivityState? = null
-            if (webContextPrompt.isBlank()) {
-                val webSettings = webIntelligenceManager.settingsRepository.getSnapshot()
-                if (webSettings.enabled && webSettings.hasApiKey(webSettings.activeProvider)) {
-                    val (isSearch, isImage) = webIntelligenceManager.detectSearchIntent(trimmed)
-                    if (isSearch) {
-                        runCatching {
-                            val webResponse = webIntelligenceManager.executeSearch(trimmed, isImageSearch = isImage)
-                            webContextPrompt = webIntelligenceManager.buildWebContextPrompt(webResponse)
-                            capturedWebActivity = webIntelligenceManager.activityState.value
-                        }.onFailure { err ->
-                            android.util.Log.w("ChatViewModel", "Web search failed: ${err.message}")
-                        }
-                    }
-                }
-            } else {
-                capturedWebActivity = webIntelligenceManager.activityState.value
-            }
+            // Use web context prompt produced by task orchestrator if present
+            val webContextPrompt = webSearchOverridePrompt
+            val capturedWebActivity: com.lichiai.web.model.WebActivityState? = if (webContextPrompt.isNotBlank()) {
+                webIntelligenceManager.activityState.value
+            } else null
 
             if (capturedWebActivity != null) {
                 updateAssistantMessage(

@@ -56,6 +56,7 @@ class VoiceConversationOrchestrator(
     private val onConversationIdChanged: (String) -> Unit = {},
     autonomousAgentTool: com.lichiai.agent.bridge.AutonomousAgentTool? = null,
     webIntelligenceManager: com.lichiai.web.WebIntelligenceManager? = null,
+    private val onShowBrowserUi: (() -> Unit)? = null,
     private val onExecuteBrowserCommand: ((String) -> Unit)? = null,
     private val routeDispatcher: com.lichiai.intent.dispatcher.RouteDispatcher? = null,
     private val taskOrchestratorV2: com.lichiai.orchestrator.UniversalTaskOrchestratorV2? = null,
@@ -86,9 +87,12 @@ class VoiceConversationOrchestrator(
         callActionExecutor = callActionExecutor,
         callActionIntentResolver = callActionIntentResolver,
         taskOrchestratorV2 = taskOrchestratorV2,
+        onShowBrowserUi = onShowBrowserUi ?: onExecuteBrowserCommand?.let { cb -> { cb("") } },
         onExecuteBrowserCommand = onExecuteBrowserCommand,
         onSaveTurn = { userText, asstText ->
-            saveTurnToConversation(userText, asstText)
+            orchestratorScope.launch {
+                saveTurnToConversation(userText, asstText)
+            }
         }
     )
 
@@ -503,7 +507,7 @@ class VoiceConversationOrchestrator(
                 ttsManager?.enqueueSentence(speech)
 
                 if (result.requiresBrowserUi) {
-                    onExecuteBrowserCommand?.invoke(trimmed)
+                    onShowBrowserUi?.invoke() ?: onExecuteBrowserCommand?.invoke("")
                 }
             }
             return
