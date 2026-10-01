@@ -83,7 +83,7 @@ OPERATIONAL INVARIANTS:
 3. If an action fails, state the failure honestly or choose an appropriate recovery action.
 4. Distinguish purely conversational chat from real tool actions.
 5. If the user asks a factual question (current events, dates, live prices, news), call "web.search".
-6. If the user asks to open an app or browse a site, call the appropriate tool.
+6. If the user asks to open an app or browse a site or perform a web task, call the appropriate tool ("browser.task", "browser.open", "android.open_app").
 7. For simple greetings or timeless conversational questions, answer directly with decision "FINAL_ANSWER" or "DIRECT_CHAT".
 
 Output strictly valid JSON with NO code fences and NO markdown wrapping:
@@ -533,6 +533,23 @@ Output strictly valid JSON with NO code fences and NO markdown wrapping:
                     isSuccess = res.isSuccess,
                     executedTools = listOf(res),
                     primaryCapability = LichiCapability.TIME_REMINDER
+                )
+            }
+        }
+
+        // Browser fallback
+        if (lower.startsWith("open ") && (lower.contains("http://") || lower.contains("https://") || lower.contains(".com") || lower.contains("website") || lower.contains("browser"))) {
+            val url = goal.replace(Regex("^(open|navigate to|browse)\\s*", RegexOption.IGNORE_CASE), "").trim()
+            val browserTool = toolRegistry.getTool("browser.open") ?: toolRegistry.getTool("browser.task")
+            if (browserTool != null) {
+                val call = ToolCall(toolId = browserTool.definition.id, arguments = mapOf("url" to url, "goal" to goal))
+                val res = browserTool.execute(call, execContext)
+                return BrainRunResult(
+                    finalSpeech = res.outputSummary,
+                    isSuccess = res.isSuccess,
+                    executedTools = listOf(res),
+                    primaryCapability = LichiCapability.BROWSER,
+                    requiresBrowserUi = true
                 )
             }
         }

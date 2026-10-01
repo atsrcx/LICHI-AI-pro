@@ -99,19 +99,19 @@ class AutonomousBrowserLoop(
             }
 
             // 3. OBSERVE (Post-action)
-            delay(600) // Allow DOM mutations to settle
+            com.lichiai.browser.runtime.BrowserConditionWaiter.waitForDomStable(settleMs = 250L, timeoutMs = 2000L) { browserController.activeEngine.value }
             val postObservation = perceptionLayer.observePage(browserController.activeEngine.value)
 
             // 4. VERIFY
             val isVerified = verifyStepOutcome(currentAction, preObservation, postObservation, result)
 
             // 5. RECOVER (if step failed or element stale)
-            if (!isVerified || result.status == ActionExecutionStatus.STALE_ELEMENT || !result.isSuccess) {
+            if (!isVerified || result.status == ActionExecutionStatus.STALE_ELEMENT || result.status == ActionExecutionStatus.STALE_TARGET_GENERATION || !result.isSuccess) {
                 onProgress?.invoke(stepNum, totalSteps, "Attempting recovery for step $stepNum...")
                 val recoveryAction = formulateRecovery(currentAction, postObservation)
                 if (recoveryAction != null) {
                     val recoveredResult = actionEngine.executeAction(recoveryAction)
-                    delay(500)
+                    com.lichiai.browser.runtime.BrowserConditionWaiter.waitForDomStable(settleMs = 200L, timeoutMs = 1500L) { browserController.activeEngine.value }
                     val recObservation = perceptionLayer.observePage(browserController.activeEngine.value)
                     if (recoveredResult.isSuccess && recObservation.url.isNotBlank()) {
                         result = recoveredResult
@@ -197,7 +197,7 @@ class AutonomousBrowserLoop(
                 }
             }
             is TypedBrowserAction.OpenURL -> {
-                TypedBrowserAction.Reload
+                TypedBrowserAction.Reload()
             }
             else -> null
         }

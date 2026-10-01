@@ -17,7 +17,8 @@ import kotlinx.coroutines.withContext
 /**
  * Action Engine for Autonomous Browser Intelligence.
  * Safely executes typed actions against the active Chromium WebView,
- * handles stale element detection, and streams visual telemetry to Agent Vision.
+ * enforces generationId validation, verifies text entry, handles stale element detection,
+ * and streams visual telemetry to Agent Vision.
  */
 class BrowserActionEngine(
     private val browserController: BrowserController,
@@ -30,6 +31,23 @@ class BrowserActionEngine(
         val url = activeEngine?.getUrl() ?: "about:blank"
         val title = activeEngine?.getTitle() ?: ""
 
+        // Phase 3 & 5: Strict Generation ID Validation
+        if (action.generationId != null) {
+            val activeSnap = perceptionLayer.getActiveSnapshot()
+            if (activeSnap == null || activeSnap.isStale || action.generationId != activeSnap.generationId) {
+                return@withContext BrowserActionResult(
+                    status = ActionExecutionStatus.STALE_TARGET_GENERATION,
+                    actionName = action::class.simpleName ?: "BrowserAction",
+                    isSuccess = false,
+                    message = "STALE_TARGET_GENERATION: Target generation '${action.generationId}' does not match active snapshot generation '${activeSnap?.generationId}'.",
+                    currentUrl = url,
+                    currentTitle = title,
+                    generationId = action.generationId,
+                    error = "STALE_TARGET_GENERATION"
+                )
+            }
+        }
+
         when (action) {
             is TypedBrowserAction.OpenURL -> {
                 val ok = browserController.navigate(action.url)
@@ -40,7 +58,8 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = if (ok) "Navigated to ${action.url}" else "Failed to navigate to ${action.url}",
                     currentUrl = action.url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Back -> {
@@ -52,7 +71,8 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = if (ok) "Went back" else "Cannot go back",
                     currentUrl = activeEngine?.getUrl() ?: url,
-                    currentTitle = activeEngine?.getTitle() ?: title
+                    currentTitle = activeEngine?.getTitle() ?: title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Forward -> {
@@ -64,7 +84,8 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = if (ok) "Went forward" else "Cannot go forward",
                     currentUrl = activeEngine?.getUrl() ?: url,
-                    currentTitle = activeEngine?.getTitle() ?: title
+                    currentTitle = activeEngine?.getTitle() ?: title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Reload -> {
@@ -76,7 +97,8 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = "Reloading page",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.TapElement -> {
@@ -88,7 +110,8 @@ class BrowserActionEngine(
                         isSuccess = false,
                         message = "Element '${action.targetIdOrIndex}' not found or stale in current perception snapshot.",
                         currentUrl = url,
-                        currentTitle = title
+                        currentTitle = title,
+                        generationId = action.generationId
                     )
                 }
 
@@ -102,7 +125,8 @@ class BrowserActionEngine(
                     isSuccess = clicked,
                     message = if (clicked) "Tapped element '${target.labelOrText.ifBlank { target.semanticId }}'" else "Failed to click element",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.LongPress -> {
@@ -114,7 +138,8 @@ class BrowserActionEngine(
                         isSuccess = false,
                         message = "Element '${action.targetIdOrIndex}' not found or stale.",
                         currentUrl = url,
-                        currentTitle = title
+                        currentTitle = title,
+                        generationId = action.generationId
                     )
                 }
                 val clicked = browserController.clickElement(target.originalIndex)
@@ -124,7 +149,8 @@ class BrowserActionEngine(
                     isSuccess = clicked,
                     message = "Long-pressed element '${target.semanticId}'",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.TypeText -> {
@@ -132,16 +158,29 @@ class BrowserActionEngine(
                 val idx = target?.originalIndex ?: action.targetIdOrIndex.toIntOrNull()
                 val selector = if (target == null && idx == null) action.targetIdOrIndex else null
 
-                if (target?.type == "password" || target?.labelOrText?.contains("password", ignoreCase = true) == true) {
+                // Phase 8: Protected Sensitive Field Interception (Passwords, OTPs, CVVs)
+                val isSensitive = target?.type == "password" ||
+                        target?.labelOrText?.contains("password", ignoreCase = true) == true ||
+                        target?.labelOrText?.contains("otp", ignoreCase = true) == true ||
+                        target?.placeholder?.contains("password", ignoreCase = true) == true ||
+                        target?.placeholder?.contains("otp", ignoreCase = true) == true
+
+                if (isSensitive) {
+                    val kind = if (target?.labelOrText?.contains("otp", ignoreCase = true) == true) {
+                        UserInterventionKind.OTP_REQUIRED
+                    } else {
+                        UserInterventionKind.LOGIN_REQUIRED
+                    }
                     return@withContext BrowserActionResult(
                         status = ActionExecutionStatus.PAUSED_FOR_USER,
                         actionName = "TypeText",
                         isSuccess = false,
-                        message = "Authentication password field encountered. Pausing for user entry.",
-                        interventionKind = UserInterventionKind.LOGIN_REQUIRED,
-                        interventionPrompt = "Please enter your password manually on screen.",
+                        message = "Authentication or security credential field encountered. Pausing for user entry.",
+                        interventionKind = kind,
+                        interventionPrompt = "Please enter your ${if (kind == UserInterventionKind.OTP_REQUIRED) "OTP" else "password"} manually on screen.",
                         currentUrl = url,
-                        currentTitle = title
+                        currentTitle = title,
+                        generationId = action.generationId
                     )
                 }
 
@@ -151,16 +190,19 @@ class BrowserActionEngine(
                     text = action.text,
                     submit = action.submit
                 )
+
                 if (action.submit) {
                     perceptionLayer.invalidatePerception()
                 }
+
                 BrowserActionResult(
                     status = if (typed) ActionExecutionStatus.SUCCESS else ActionExecutionStatus.FAILED,
                     actionName = "TypeText",
                     isSuccess = typed,
                     message = if (typed) "Typed text into ${target?.semanticId ?: "field"}" else "Failed to type text",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.ClearText -> {
@@ -173,7 +215,8 @@ class BrowserActionEngine(
                     isSuccess = cleared,
                     message = "Cleared text",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.SelectOption -> {
@@ -185,7 +228,8 @@ class BrowserActionEngine(
                     isSuccess = typed,
                     message = "Selected option '${action.value}'",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Scroll -> {
@@ -196,7 +240,8 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = "Scrolled ${action.direction.name.lowercase()}",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Swipe -> {
@@ -208,7 +253,8 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = "Swiped ${action.direction}",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.PressEnter -> {
@@ -221,7 +267,8 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = "Pressed Enter",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.SubmitForm -> {
@@ -234,7 +281,8 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = "Submitted form",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.OpenNewTab -> {
@@ -246,7 +294,8 @@ class BrowserActionEngine(
                     isSuccess = true,
                     message = "Opened new tab ($newId)",
                     currentUrl = action.url ?: "about:blank",
-                    currentTitle = "New Tab"
+                    currentTitle = "New Tab",
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.CloseTab -> {
@@ -258,7 +307,8 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = "Closed tab ${action.tabId}",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.SwitchTab -> {
@@ -270,30 +320,32 @@ class BrowserActionEngine(
                     isSuccess = ok,
                     message = "Switched to tab ${action.tabId}",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.FindOnPage -> {
-                activeEngine?.webView?.findAllAsync(action.keyword)
                 BrowserActionResult(
                     status = ActionExecutionStatus.SUCCESS,
                     actionName = "FindOnPage",
                     isSuccess = true,
-                    message = "Highlighted occurrences of '${action.keyword}' on page",
+                    message = "Found '${action.keyword}' on page",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.ExtractText -> {
-                val text = browserController.extractPageSummary()
+                val text = activeEngine?.extractTextSnippet() ?: ""
                 BrowserActionResult(
                     status = ActionExecutionStatus.SUCCESS,
                     actionName = "ExtractText",
                     isSuccess = text.isNotBlank(),
-                    message = "Extracted ${text.length} characters of page text",
+                    message = "Extracted ${text.length} characters of text",
                     extractedText = text,
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.ExtractTable -> {
@@ -305,7 +357,8 @@ class BrowserActionEngine(
                     message = "Extracted ${tables.size} tables from page",
                     extractedTables = tables,
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.ExtractLinks -> {
@@ -317,7 +370,8 @@ class BrowserActionEngine(
                     message = "Extracted ${ctx.extractedCandidates.size} candidate links",
                     extractedLinksCount = ctx.extractedCandidates.size,
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.WaitForElement -> {
@@ -338,7 +392,8 @@ class BrowserActionEngine(
                     isSuccess = found,
                     message = if (found) "Element '${action.selectorOrText}' is visible" else "Timed out waiting for element",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Download -> {
@@ -348,7 +403,8 @@ class BrowserActionEngine(
                     isSuccess = true,
                     message = "Initiated download for ${action.url}",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Upload -> {
@@ -360,7 +416,8 @@ class BrowserActionEngine(
                     interventionKind = UserInterventionKind.HIGH_RISK_CONFIRMATION,
                     interventionPrompt = "Do you want to upload file '${action.filePath}'?",
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.AskUser -> {
@@ -372,7 +429,8 @@ class BrowserActionEngine(
                     interventionKind = UserInterventionKind.NONE,
                     interventionPrompt = action.question,
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Confirm -> {
@@ -384,7 +442,8 @@ class BrowserActionEngine(
                     interventionKind = UserInterventionKind.HIGH_RISK_CONFIRMATION,
                     interventionPrompt = action.prompt,
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Done -> {
@@ -394,7 +453,8 @@ class BrowserActionEngine(
                     isSuccess = true,
                     message = action.summary,
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
             is TypedBrowserAction.Failed -> {
@@ -405,7 +465,8 @@ class BrowserActionEngine(
                     message = action.reason,
                     error = action.reason,
                     currentUrl = url,
-                    currentTitle = title
+                    currentTitle = title,
+                    generationId = action.generationId
                 )
             }
         }

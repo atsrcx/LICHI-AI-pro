@@ -75,6 +75,7 @@ class UnifiedToolRegistry(
 
         // Browser
         browserController?.let { bc ->
+            register(com.lichiai.toolruntime.tools.BrowserTaskTool(bc, onNavigateToBrowser))
             register(BrowserOpenTool(bc, onNavigateToBrowser))
             register(BrowserExtractTool(bc))
             register(BrowserActionTool(bc, onNavigateToBrowser))

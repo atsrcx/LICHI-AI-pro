@@ -55,14 +55,20 @@ typealias ConversationalAgentRuntime = UniversalTaskOrchestratorV2
  */
 class UniversalTaskOrchestratorV2(
     private val context: Context,
-    private val capabilityCatalog: CapabilityCatalogV2,
     private val contextBuilder: ContextBuilder,
-    private val routeDispatcher: RouteDispatcher,
     private val llmClient: LlmClient,
+    private val browserController: com.lichiai.browser.BrowserController? = null,
+    private val webIntelligenceManager: com.lichiai.web.WebIntelligenceManager? = null,
+    private val universalCallEngine: com.lichiai.calling.engine.UniversalCallEngine? = null,
+    private val callActionExecutor: CallActionExecutor? = null,
+    private val autonomousAgentTool: com.lichiai.agent.bridge.AutonomousAgentTool? = null,
+    private val onNavigateToBrowser: () -> Unit = {},
+    private val onNavigateToTerminal: () -> Unit = {},
+    private val capabilityCatalog: CapabilityCatalogV2? = null,
+    private val routeDispatcher: RouteDispatcher? = null,
     private val shadowComparator: ShadowExecutionComparator = ShadowExecutionComparator(),
-    private val loopGuard: OrchestratorLoopGuard = OrchestratorLoopGuard(),
-    private val evaluator: TaskResultEvaluator = TaskResultEvaluator(llmClient),
-    private val callActionExecutor: CallActionExecutor? = null
+    private val loopGuard: OrchestratorLoopGuard? = null,
+    private val evaluator: TaskResultEvaluator? = null
 ) {
 
     companion object {
@@ -73,19 +79,19 @@ class UniversalTaskOrchestratorV2(
 
     val toolRegistry = UnifiedToolRegistry(
         context = context,
-        webIntelligenceManager = routeDispatcher.webIntelligenceManager,
-        browserController = routeDispatcher.browserController,
-        universalCallEngine = routeDispatcher.universalCallEngine,
+        webIntelligenceManager = webIntelligenceManager ?: routeDispatcher?.webIntelligenceManager,
+        browserController = browserController ?: routeDispatcher?.browserController,
+        universalCallEngine = universalCallEngine ?: routeDispatcher?.universalCallEngine,
         callActionExecutor = callActionExecutor,
-        autonomousAgentTool = routeDispatcher.autonomousAgentTool,
+        autonomousAgentTool = autonomousAgentTool ?: routeDispatcher?.autonomousAgentTool,
         actionExecutor = com.lichiai.agent.Agent.getInstance(context).actionExecutor,
         terminalManager = com.lichiai.terminal.core.TerminalManager.getInstance(context),
         reminderManager = com.lichiai.time.manager.ReminderManager(context),
         timeCapabilityAdapter = com.lichiai.time.adapter.TimeCapabilityAdapter(context),
         memoryEngine = com.lichiai.memory.manager.LichiMemoryEngine.getInstance(context),
         skillRepository = com.lichiai.skill.repository.SkillRepository.getInstance(context),
-        onNavigateToBrowser = routeDispatcher.onNavigateToBrowser,
-        onNavigateToTerminal = routeDispatcher.onNavigateToTerminal
+        onNavigateToBrowser = onNavigateToBrowser.takeIf { it != {} } ?: (routeDispatcher?.onNavigateToBrowser ?: {}),
+        onNavigateToTerminal = onNavigateToTerminal.takeIf { it != {} } ?: (routeDispatcher?.onNavigateToTerminal ?: {})
     )
 
     val centralBrain = LichiCentralBrain(context, toolRegistry, llmClient)

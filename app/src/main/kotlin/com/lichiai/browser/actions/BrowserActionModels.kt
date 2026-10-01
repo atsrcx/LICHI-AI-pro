@@ -6,42 +6,45 @@ import kotlinx.serialization.Serializable
 
 /**
  * Structured typed actions supported by the Autonomous Browser Intelligence Engine.
- * Conforms to Section 10 requirements.
+ * Supports end-to-end generationId tracking to prevent executing on stale DOM generations.
  */
 sealed class TypedBrowserAction {
-    data class OpenURL(val url: String) : TypedBrowserAction()
-    object Back : TypedBrowserAction()
-    object Forward : TypedBrowserAction()
-    object Reload : TypedBrowserAction()
-    data class TapElement(val targetIdOrIndex: String) : TypedBrowserAction()
-    data class LongPress(val targetIdOrIndex: String) : TypedBrowserAction()
-    data class TypeText(val targetIdOrIndex: String, val text: String, val submit: Boolean = false) : TypedBrowserAction()
-    data class ClearText(val targetIdOrIndex: String) : TypedBrowserAction()
-    data class SelectOption(val targetIdOrIndex: String, val value: String) : TypedBrowserAction()
-    data class Scroll(val direction: ScrollDirection, val amount: Int = 1) : TypedBrowserAction()
-    data class Swipe(val direction: String) : TypedBrowserAction()
-    data class PressEnter(val targetIdOrIndex: String? = null) : TypedBrowserAction()
-    data class SubmitForm(val targetIdOrIndex: String? = null) : TypedBrowserAction()
-    data class OpenNewTab(val url: String? = null, val isIncognito: Boolean = false) : TypedBrowserAction()
-    data class CloseTab(val tabId: String) : TypedBrowserAction()
-    data class SwitchTab(val tabId: String) : TypedBrowserAction()
-    data class FindOnPage(val keyword: String) : TypedBrowserAction()
-    object ExtractText : TypedBrowserAction()
-    object ExtractTable : TypedBrowserAction()
-    object ExtractLinks : TypedBrowserAction()
-    data class WaitForElement(val selectorOrText: String, val timeoutMs: Long = 3000L) : TypedBrowserAction()
-    data class Download(val url: String, val fileName: String? = null) : TypedBrowserAction()
-    data class Upload(val targetIdOrIndex: String, val filePath: String) : TypedBrowserAction()
-    data class AskUser(val question: String) : TypedBrowserAction()
-    data class Confirm(val prompt: String, val actionToConfirm: String) : TypedBrowserAction()
-    data class Done(val summary: String) : TypedBrowserAction()
-    data class Failed(val reason: String) : TypedBrowserAction()
+    open val generationId: String? = null
+
+    data class OpenURL(val url: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class Back(override val generationId: String? = null) : TypedBrowserAction()
+    data class Forward(override val generationId: String? = null) : TypedBrowserAction()
+    data class Reload(override val generationId: String? = null) : TypedBrowserAction()
+    data class TapElement(val targetIdOrIndex: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class LongPress(val targetIdOrIndex: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class TypeText(val targetIdOrIndex: String, val text: String, val submit: Boolean = false, override val generationId: String? = null) : TypedBrowserAction()
+    data class ClearText(val targetIdOrIndex: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class SelectOption(val targetIdOrIndex: String, val value: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class Scroll(val direction: ScrollDirection, val amount: Int = 1, override val generationId: String? = null) : TypedBrowserAction()
+    data class Swipe(val direction: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class PressEnter(val targetIdOrIndex: String? = null, override val generationId: String? = null) : TypedBrowserAction()
+    data class SubmitForm(val targetIdOrIndex: String? = null, override val generationId: String? = null) : TypedBrowserAction()
+    data class OpenNewTab(val url: String? = null, val isIncognito: Boolean = false, override val generationId: String? = null) : TypedBrowserAction()
+    data class CloseTab(val tabId: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class SwitchTab(val tabId: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class FindOnPage(val keyword: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class ExtractText(override val generationId: String? = null) : TypedBrowserAction()
+    data class ExtractTable(override val generationId: String? = null) : TypedBrowserAction()
+    data class ExtractLinks(override val generationId: String? = null) : TypedBrowserAction()
+    data class WaitForElement(val selectorOrText: String, val timeoutMs: Long = 3000L, override val generationId: String? = null) : TypedBrowserAction()
+    data class Download(val url: String, val fileName: String? = null, override val generationId: String? = null) : TypedBrowserAction()
+    data class Upload(val targetIdOrIndex: String, val filePath: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class AskUser(val question: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class Confirm(val prompt: String, val actionToConfirm: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class Done(val summary: String, override val generationId: String? = null) : TypedBrowserAction()
+    data class Failed(val reason: String, override val generationId: String? = null) : TypedBrowserAction()
 }
 
 enum class ActionExecutionStatus {
     SUCCESS,
     FAILED,
     STALE_ELEMENT,
+    STALE_TARGET_GENERATION,
     PAUSED_FOR_USER,
     REQUIRES_CONFIRMATION,
     TIMEOUT,
@@ -66,6 +69,7 @@ data class BrowserActionResult(
     val message: String,
     val currentUrl: String = "",
     val currentTitle: String = "",
+    val generationId: String? = null,
     val interventionKind: UserInterventionKind = UserInterventionKind.NONE,
     val interventionPrompt: String? = null,
     val extractedText: String? = null,

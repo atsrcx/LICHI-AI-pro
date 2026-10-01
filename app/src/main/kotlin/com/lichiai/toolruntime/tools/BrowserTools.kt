@@ -1,6 +1,8 @@
 package com.lichiai.toolruntime.tools
 
 import com.lichiai.browser.BrowserController
+import com.lichiai.browser.runtime.BrowserTaskIntent
+import com.lichiai.browser.runtime.BrowserTaskType
 import com.lichiai.intent.model.LichiCapability
 import com.lichiai.toolruntime.core.LichiTool
 import com.lichiai.toolruntime.model.ToolCall
@@ -13,6 +15,115 @@ import com.lichiai.toolruntime.model.ToolResult
 import com.lichiai.toolruntime.model.ToolRiskLevel
 import com.lichiai.toolruntime.model.VerificationResult
 import kotlinx.coroutines.delay
+
+/**
+ * Authoritative Autonomous Browser Task Tool for LichiCentralBrain.
+ * Delegates high-level web goals to the BrowserAgentRuntime closed-loop operating system.
+ */
+class BrowserTaskTool(
+    private val browserController: BrowserController,
+    private val onNavigateToBrowser: () -> Unit = {}
+) : LichiTool {
+
+    override val definition = ToolDefinition(
+        id = "browser.task",
+        name = "Autonomous Browser Task",
+        description = "Executes an end-to-end multi-step web task in the Chromium browser (e.g. search and open official website, fill form, research, extract).",
+        purpose = "Complete autonomous web browsing goals using the closed-loop Browser Operating System.",
+        category = ToolCategory.BROWSER,
+        mappedCapability = LichiCapability.BROWSER,
+        parameters = listOf(
+            ToolParameter("goal", "string", "The high-level user goal or instruction to accomplish in the browser", required = true),
+            ToolParameter("task_type", "string", "Optional task type: NAVIGATE, SEARCH, SEARCH_AND_OPEN, FIND_INFORMATION, FILL_FORM, DOWNLOAD, READ_PAGE, RESEARCH", required = false),
+            ToolParameter("expected_outcome", "string", "Optional description of the desired completion state", required = false)
+        ),
+        riskLevel = ToolRiskLevel.LOW_RISK_STATE_CHANGE,
+        requiresConfirmation = false,
+        idempotent = false,
+        timeoutMs = 45_000L,
+        requiresNetwork = true,
+        changesWorldState = true
+    )
+
+    override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+        val goal = call.arguments["goal"]?.trim() ?: context.userGoal
+        if (goal.isBlank()) {
+            return ToolResult.failure(call.callId, definition.id, "Goal is empty.")
+        }
+
+        val taskTypeStr = call.arguments["task_type"]?.trim()?.uppercase()
+        val taskType = try {
+            if (!taskTypeStr.isNullOrBlank()) BrowserTaskType.valueOf(taskTypeStr) else null
+        } catch (e: Exception) {
+            null
+        }
+
+        val expectedOutcome = call.arguments["expected_outcome"]?.trim()
+        val intent = if (taskType != null) {
+            BrowserTaskIntent(
+                goal = goal,
+                taskType = taskType,
+                expectedOutcome = expectedOutcome
+            )
+        } else {
+            BrowserTaskIntent.fromGoal(goal, expectedOutcome)
+        }
+
+        context.onProgress?.invoke(1, 4, "Initiating browser task: $goal")
+        onNavigateToBrowser()
+
+        return try {
+            val agentResult = browserController.agent.executeGoal(intent) { step, total, statusText ->
+                context.onProgress?.invoke(step, total, statusText)
+            }
+
+            if (agentResult.isSuccess) {
+                ToolResult.success(
+                    callId = call.callId,
+                    toolId = definition.id,
+                    summary = agentResult.summary.ifBlank { "Browser task completed successfully." },
+                    data = mapOf(
+                        "goal" to goal,
+                        "final_url" to agentResult.finalUrl,
+                        "title" to agentResult.pageTitle,
+                        "answer" to (agentResult.answer ?: "")
+                    ),
+                    rawOutput = agentResult.extractedContext ?: agentResult.summary,
+                    outcome = ToolExecutionOutcome.EXECUTION_SUCCEEDED_UNVERIFIED
+                )
+            } else {
+                ToolResult.failure(call.callId, definition.id, agentResult.summary.ifBlank { "Browser task failed." })
+            }
+        } catch (e: Exception) {
+            ToolResult.failure(call.callId, definition.id, "Error during browser task: ${e.message}")
+        }
+    }
+
+    override suspend fun verify(call: ToolCall, result: ToolResult, context: ToolExecutionContext): VerificationResult {
+        val goal = call.arguments["goal"]?.trim() ?: context.userGoal
+        val intent = BrowserTaskIntent.fromGoal(goal)
+        val pageCtx = browserController.getPageContext()
+        val tempSnapshot = com.lichiai.browser.perception.PagePerceptionSnapshot(
+            url = pageCtx.currentUrl,
+            title = pageCtx.currentTitle,
+            loadingState = com.lichiai.browser.context.BrowserPageState(isLoaded = true),
+            visibleTextSnippet = result.rawOutput ?: "",
+            semanticElements = emptyList(),
+            candidateLinks = emptyList(),
+            candidatePrices = emptyList(),
+            extractedTables = emptyList()
+        )
+        val goalCheck = browserController.agent.runtime.verifyGoal(intent, tempSnapshot)
+        val isVerified = result.isSuccess && (goalCheck.status == com.lichiai.browser.runtime.GoalVerificationStatus.VERIFIED || goalCheck.status == com.lichiai.browser.runtime.GoalVerificationStatus.PARTIALLY_VERIFIED)
+
+        return VerificationResult(
+            isVerified = isVerified,
+            verifiedState = goalCheck.observedState,
+            notes = "Goal status: ${goalCheck.status} (${goalCheck.verificationEvidence})",
+            outcome = if (isVerified) ToolExecutionOutcome.EXECUTION_SUCCEEDED_VERIFIED else ToolExecutionOutcome.VERIFICATION_FAILED
+        )
+    }
+}
 
 /**
  * Real Browser Navigation Tool.
@@ -92,7 +203,6 @@ class BrowserOpenTool(
 
     override suspend fun verify(call: ToolCall, result: ToolResult, context: ToolExecutionContext): VerificationResult {
         val currentCtx = browserController.getPageContext()
-        val requested = result.data["requested_url"] ?: ""
         val actual = currentCtx.currentUrl
         val isVerified = result.isSuccess && (actual.isNotBlank() || currentCtx.currentTitle.isNotBlank())
         return VerificationResult(
