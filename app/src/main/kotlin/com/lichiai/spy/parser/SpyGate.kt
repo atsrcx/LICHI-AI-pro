@@ -33,8 +33,8 @@ object SpyGate {
 
     fun checkTrigger(input: String): com.lichiai.spy.core.SpyGateResult {
         if (!isSpyCommand(input)) return com.lichiai.spy.core.SpyGateResult.NotTriggered
-        val (clean, _) = extractPayload(input)
-        return com.lichiai.spy.core.SpyGateResult.Triggered(cleanQuery = clean, rawInput = input)
+        val (clean, isFullScan) = extractPayload(input)
+        return com.lichiai.spy.core.SpyGateResult.Triggered(cleanQuery = clean, rawInput = input, isFullScan = isFullScan)
     }
 
     fun isSpyTriggered(input: String): Boolean {

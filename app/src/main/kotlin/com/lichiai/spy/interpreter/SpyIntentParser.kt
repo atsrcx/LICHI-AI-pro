@@ -19,14 +19,26 @@ import java.util.Locale
  */
 object SpyIntentParser {
 
-    private val FULL_FLAG_REGEX = Regex("(?:^|\\s)(?i)-full\\b")
+    private val FULL_FLAG_REGEX = Regex("(?:^|\\s)(?i)(?:--full|-full|—full|\\bfull\\b)")
 
-    fun parse(cleanQuery: String, requestId: String = "", messageId: String = ""): SpyTask {
-        val hasFullFlag = FULL_FLAG_REGEX.containsMatchIn(cleanQuery)
+    fun parse(
+        cleanQuery: String,
+        requestId: String = "",
+        messageId: String = "",
+        isFullScan: Boolean = false
+    ): SpyTask {
+        val hasFullFlag = isFullScan || FULL_FLAG_REGEX.containsMatchIn(cleanQuery)
         val lookupMode = if (hasFullFlag) SpyLookupMode.FULL else SpyLookupMode.SINGLE
 
-        // Strip the -full flag so it doesn't pollute target extraction
-        val queryWithoutFull = cleanQuery.replace(FULL_FLAG_REGEX, " ").trim()
+        // Strip any leading #Spy / #spy / #SPY prefix and --full/-full flags so they don't pollute target extraction
+        var clean = cleanQuery.trim()
+        for (prefix in listOf("#spy", "#Spy", "#SPY")) {
+            if (clean.startsWith(prefix, ignoreCase = true)) {
+                clean = clean.substring(prefix.length).trim()
+                break
+            }
+        }
+        val queryWithoutFull = clean.replace(FULL_FLAG_REGEX, " ").trim()
         val lower = queryWithoutFull.lowercase(Locale.ROOT)
 
         val phoneTarget = TargetExtractor.extractPhoneNumber(queryWithoutFull)

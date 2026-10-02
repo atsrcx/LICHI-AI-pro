@@ -38,7 +38,7 @@ import com.lichiai.ui.voice.VoiceSettingsScreen
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-private enum class Screen { Chat, Settings, Providers, ProviderEdit, Assistants, Voice, VoiceSettings, HandleMyCalls, CallDiagnostics, DynamicIsland, Skills, WebSearchSettings, AgentVision, Browser, Reminders, Terminal, PlatformIntelligence, SpyReport }
+private enum class Screen { Dashboard, Chat, Settings, Providers, ProviderEdit, Assistants, Voice, VoiceSettings, HandleMyCalls, CallDiagnostics, DynamicIsland, Skills, WebSearchSettings, AgentVision, Browser, Reminders, Terminal, PlatformIntelligence, SpyReport }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -66,6 +66,9 @@ fun AppRoot(vm: ChatViewModel) {
     }
     androidx.activity.compose.BackHandler(enabled = showModelPicker) {
         showModelPicker = false
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.Dashboard) {
+        screen = Screen.Chat
     }
     androidx.activity.compose.BackHandler(enabled = screen == Screen.Settings) {
         screen = Screen.Chat
@@ -188,84 +191,68 @@ fun AppRoot(vm: ChatViewModel) {
             .background(MaterialTheme.colorScheme.background)
     ) {
         when (screen) {
+            Screen.Dashboard -> {
+                LichiDashboardScreen(
+                    conversations = conversations,
+                    activeId = activeId,
+                    onSelectConversation = { id ->
+                        vm.selectConversation(id)
+                        screen = Screen.Chat
+                    },
+                    onNewChat = {
+                        vm.newConversation()
+                        screen = Screen.Chat
+                    },
+                    onClearAll = {
+                        conversations.forEach { vm.deleteConversation(it.id) }
+                        vm.newConversation()
+                    },
+                    onOpenVoice = { screen = Screen.Voice },
+                    onOpenCalls = { screen = Screen.CallDiagnostics },
+                    onOpenBrowser = { screen = Screen.Browser },
+                    onOpenReminders = { screen = Screen.Reminders },
+                    onOpenTerminal = { screen = Screen.Terminal },
+                    onOpenSettings = { screen = Screen.Settings },
+                    onHomeClick = { screen = Screen.Chat }
+                )
+            }
             Screen.Chat -> {
-                ModalNavigationDrawer(
-                    drawerState = drawerState,
-                    drawerContent = {
-                        GlassDrawer(
-                            conversations = conversations,
-                            activeId = activeId,
-                            onSelect = { id ->
-                                vm.selectConversation(id)
-                                scope.launch { drawerState.close() }
-                            },
-                            onNew = {
-                                vm.newConversation()
-                                scope.launch { drawerState.close() }
-                            },
-                            onDelete = { vm.deleteConversation(it) },
-                            onRename = { id, t -> vm.renameConversation(id, t) },
-                            onOpenSettings = {
-                                screen = Screen.Settings
-                                scope.launch { drawerState.close() }
-                            },
-                            onOpenVoiceMode = {
-                                screen = Screen.Voice
-                                scope.launch { drawerState.close() }
-                            },
-                            onOpenCallingSystem = {
-                                screen = Screen.CallDiagnostics
-                                scope.launch { drawerState.close() }
-                            },
-                            onOpenBrowser = {
-                                screen = Screen.Browser
-                                scope.launch { drawerState.close() }
-                            },
-                            onOpenReminders = {
-                                screen = Screen.Reminders
-                                scope.launch { drawerState.close() }
-                            },
-                            onOpenTerminal = {
-                                screen = Screen.Terminal
-                                scope.launch { drawerState.close() }
-                            }
-                        )
+                ChatScreen(
+                    conversation = activeConv,
+                    settings = settings,
+                    activeProvider = activeProvider,
+                    isStreaming = isStreaming,
+                    streamingOverlay = streamingOverlay,
+                    agentLiveStatus = agentLiveStatus,
+                    webActivityState = webActivityState,
+                    liveActivityState = liveActivityState,
+                    activeSpeakingMessageId = activeSpeakingMessageId,
+                    onMenu = { screen = Screen.Dashboard },
+                    onSend = { text, atts -> vm.sendMessage(text, atts) },
+                    onStop = { vm.stopStreaming() },
+                    onRegenerate = { vm.regenerate() },
+                    onRegenerateFrom = { msgId -> vm.regenerateFrom(msgId) },
+                    onDeleteMessage = { msgId -> vm.deleteMessage(msgId) },
+                    onEditMessage = { msgId, newText -> vm.editMessage(msgId, newText) },
+                    onToggleSpeak = { msgId, text -> vm.toggleSpeakMessage(msgId, text) },
+                    onNew = { vm.newConversation() },
+                    onOpenSettings = { screen = Screen.Settings },
+                    onPickModel = {
+                        if (providers.isEmpty()) {
+                            editingProvider = null
+                            screen = Screen.ProviderEdit
+                        } else showModelPicker = true
+                    },
+                    onOpenVoiceMode = { screen = Screen.Voice },
+                    onOpenBrowser = { screen = Screen.Browser },
+                    onClearChat = {
+                        activeConv?.let { vm.deleteConversation(it.id); vm.newConversation() }
+                    },
+                    onOpenReport = { reportId ->
+                        currentReportId = reportId
+                        screen = Screen.SpyReport
                     }
-                ) {
-                    ChatScreen(
-                        conversation = activeConv,
-                        settings = settings,
-                        activeProvider = activeProvider,
-                        isStreaming = isStreaming,
-                        streamingOverlay = streamingOverlay,
-                        agentLiveStatus = agentLiveStatus,
-                        webActivityState = webActivityState,
-                        liveActivityState = liveActivityState,
-                        activeSpeakingMessageId = activeSpeakingMessageId,
-                        onMenu = { scope.launch { drawerState.open() } },
-                        onSend = { text, atts -> vm.sendMessage(text, atts) },
-                        onStop = { vm.stopStreaming() },
-                        onRegenerate = { vm.regenerate() },
-                        onRegenerateFrom = { msgId -> vm.regenerateFrom(msgId) },
-                        onDeleteMessage = { msgId -> vm.deleteMessage(msgId) },
-                        onEditMessage = { msgId, newText -> vm.editMessage(msgId, newText) },
-                        onToggleSpeak = { msgId, text -> vm.toggleSpeakMessage(msgId, text) },
-                        onNew = { vm.newConversation() },
-                        onOpenSettings = { screen = Screen.Settings },
-                        onPickModel = {
-                            if (providers.isEmpty()) {
-                                editingProvider = null
-                                screen = Screen.ProviderEdit
-                            } else showModelPicker = true
-                        },
-                        onOpenVoiceMode = { screen = Screen.Voice },
-                        onOpenBrowser = { screen = Screen.Browser },
-                        onOpenReport = { reportId ->
-                            currentReportId = reportId
-                            screen = Screen.SpyReport
-                        }
-                    )
-                }
+                )
             }
             Screen.Settings -> {
                 SettingsScreen(

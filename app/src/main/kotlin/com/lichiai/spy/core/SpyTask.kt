@@ -125,7 +125,9 @@ data class SpyTask(
     val maxResults: Int = 5,
     val requiresPaidExecution: Boolean = false,
     val previewRequested: Boolean = true
-)
+) {
+    val isFullScan: Boolean get() = lookupMode == SpyLookupMode.FULL
+}
 
 @Serializable
 enum class SpyTaskState {

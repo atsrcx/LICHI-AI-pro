@@ -32,6 +32,7 @@ import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Headphones
 import androidx.compose.material.icons.filled.Lightbulb
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhoneAndroid
 import androidx.compose.material.icons.filled.Public
 import androidx.compose.material.icons.filled.SmartToy
@@ -123,8 +124,7 @@ object LichiVisualTokens {
 }
 
 /**
- * Top Left Brand Pill:
- * [ ☰ ]  LICHI-AI  ●
+ * Left Circle: Hamburger Menu (Three Lines) -> Opens Dashboard Hub
  */
 @Composable
 fun LichiBrandPill(
@@ -132,59 +132,35 @@ fun LichiBrandPill(
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(26.dp),
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 2.dp,
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+        shadowElevation = 1.dp,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            Color(0xFF334155).copy(alpha = 0.6f)
+        ),
         modifier = modifier
-            .height(44.dp)
-            .border(0.8.dp, LichiVisualTokens.SurfaceBorder, RoundedCornerShape(26.dp))
-            .shadow(
-                elevation = 4.dp,
-                shape = RoundedCornerShape(26.dp),
-                spotColor = LichiVisualTokens.SoftPillShadow,
-                ambientColor = LichiVisualTokens.SoftPillShadow
+            .size(32.dp)
+            .clip(CircleShape)
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = ripple(bounded = true),
+                onClick = onMenu
             )
     ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier
-                .clickable(
-                    interactionSource = remember { MutableInteractionSource() },
-                    indication = ripple(bounded = true, color = LichiVisualTokens.BrandPurple),
-                    onClick = onMenu
-                )
-                .padding(start = 12.dp, end = 16.dp, top = 6.dp, bottom = 6.dp)
-        ) {
+        Box(contentAlignment = Alignment.Center) {
             Icon(
                 imageVector = Icons.Default.Menu,
-                contentDescription = "Open Navigation Drawer",
+                contentDescription = "Open Chats & Tools Hub",
                 tint = MaterialTheme.colorScheme.onSurface,
-                modifier = Modifier.size(20.dp)
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = "LICHI–AI",
-                style = MaterialTheme.typography.titleMedium.copy(
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 0.4.sp,
-                    fontSize = 14.5.sp
-                ),
-                color = MaterialTheme.colorScheme.onSurface
-            )
-            Spacer(Modifier.width(8.dp))
-            Box(
-                modifier = Modifier
-                    .size(8.dp)
-                    .clip(CircleShape)
-                    .background(LichiVisualTokens.BrandPurple)
+                modifier = Modifier.size(16.dp)
             )
         }
     }
 }
 
 /**
- * Top Right Control Pill:
- * [ ● provider/model ▾ | 🌐 | 🎧 | ✏️ ]
+ * Right Pill: Compact Model Picker + Action Icons (Earth, Mic, Pencil)
  */
 @Composable
 fun LichiControlPill(
@@ -193,63 +169,61 @@ fun LichiControlPill(
     onOpenBrowser: () -> Unit,
     onOpenVoiceMode: () -> Unit,
     onNewChat: () -> Unit,
+    isWebSearchActive: Boolean = false,
+    onToggleWebSearch: (() -> Unit)? = null,
     modifier: Modifier = Modifier
 ) {
     Surface(
-        shape = RoundedCornerShape(26.dp),
-        color = MaterialTheme.colorScheme.surface,
-        shadowElevation = 2.dp,
-        modifier = modifier
-            .height(44.dp)
-            .border(0.8.dp, LichiVisualTokens.SurfaceBorder, RoundedCornerShape(26.dp))
-            .shadow(
-                elevation = 4.dp,
-                shape = RoundedCornerShape(26.dp),
-                spotColor = LichiVisualTokens.SoftPillShadow,
-                ambientColor = LichiVisualTokens.SoftPillShadow
-            )
+        shape = CircleShape,
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
+        shadowElevation = 1.dp,
+        border = androidx.compose.foundation.BorderStroke(
+            1.dp,
+            Color(0xFF334155).copy(alpha = 0.6f)
+        ),
+        modifier = modifier.height(34.dp)
     ) {
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
         ) {
             // Model Selector Segment
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 modifier = Modifier
-                    .clip(RoundedCornerShape(18.dp))
+                    .clip(RoundedCornerShape(12.dp))
                     .clickable(
                         interactionSource = remember { MutableInteractionSource() },
                         indication = ripple(bounded = true),
                         onClick = onPickModel
                     )
-                    .padding(horizontal = 6.dp, vertical = 6.dp)
+                    .padding(horizontal = 4.dp, vertical = 2.dp)
             ) {
                 // Green status dot
                 Box(
                     modifier = Modifier
-                        .size(7.dp)
+                        .size(6.dp)
                         .clip(CircleShape)
-                        .background(LichiVisualTokens.StatusGreen)
+                        .background(Color(0xFF10B981))
                 )
-                Spacer(Modifier.width(6.dp))
+                Spacer(Modifier.width(4.dp))
                 Text(
                     text = modelLabel,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     style = MaterialTheme.typography.bodySmall.copy(
                         fontWeight = FontWeight.Medium,
-                        fontSize = 12.sp
+                        fontSize = 10.sp
                     ),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.widthIn(max = 110.dp)
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier.widthIn(max = 95.dp)
                 )
                 Spacer(Modifier.width(2.dp))
                 Icon(
                     imageVector = Icons.Default.ExpandMore,
                     contentDescription = "Select Model",
-                    tint = LichiVisualTokens.TextGraySubtle,
-                    modifier = Modifier.size(16.dp)
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(13.dp)
                 )
             }
 
@@ -258,72 +232,83 @@ fun LichiControlPill(
                 modifier = Modifier
                     .padding(horizontal = 4.dp)
                     .width(1.dp)
-                    .height(18.dp)
-                    .background(MaterialTheme.colorScheme.outlineVariant)
+                    .height(14.dp)
+                    .background(Color(0xFFE2E8F0))
             )
 
-            // Globe / Browser Action
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true),
-                        onClick = onOpenBrowser
-                    ),
-                contentAlignment = Alignment.Center
+            // Right Action Icons (Earth, Mic, Pencil)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
             ) {
-                Icon(
-                    imageVector = Icons.Default.Public,
-                    contentDescription = "Browser Agent",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
+                // Earth / Web Search Toggle
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = ripple(bounded = true),
+                            onClick = { onToggleWebSearch?.invoke() ?: onOpenBrowser() }
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Public,
+                        contentDescription = "Toggle Live Web Search",
+                        tint = if (isWebSearchActive) LichiVisualTokens.BrandPurple else MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(14.dp)
+                    )
+                    if (isWebSearchActive) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.TopEnd)
+                                .size(5.dp)
+                                .clip(CircleShape)
+                                .background(LichiVisualTokens.BrandPurple)
+                        )
+                    }
+                }
 
-            Spacer(Modifier.width(2.dp))
+                // Mic / Voice Mode
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = ripple(bounded = true),
+                            onClick = onOpenVoiceMode
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Mic,
+                        contentDescription = "Voice Mode",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
 
-            // Headphones / Voice Mode Action
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true),
-                        onClick = onOpenVoiceMode
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Headphones,
-                    contentDescription = "Voice Mode",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-
-            Spacer(Modifier.width(2.dp))
-
-            // Pencil / New Chat Action
-            Box(
-                modifier = Modifier
-                    .size(32.dp)
-                    .clip(CircleShape)
-                    .clickable(
-                        interactionSource = remember { MutableInteractionSource() },
-                        indication = ripple(bounded = true),
-                        onClick = onNewChat
-                    ),
-                contentAlignment = Alignment.Center
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Edit,
-                    contentDescription = "New Conversation",
-                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.size(17.dp)
-                )
+                // Pencil / New Chat
+                Box(
+                    modifier = Modifier
+                        .size(26.dp)
+                        .clip(CircleShape)
+                        .clickable(
+                            interactionSource = remember { MutableInteractionSource() },
+                            indication = ripple(bounded = true),
+                            onClick = onNewChat
+                        ),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Edit,
+                        contentDescription = "New Chat",
+                        tint = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier.size(14.dp)
+                    )
+                }
             }
         }
     }

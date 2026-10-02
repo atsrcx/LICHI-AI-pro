@@ -321,7 +321,7 @@ fun InputBar(
 }
 
 @Composable
-private fun AttachmentChip(att: Attachment, onRemove: () -> Unit) {
+internal fun AttachmentChip(att: Attachment, onRemove: () -> Unit) {
     Row(
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))

@@ -322,6 +322,15 @@ object ActorInputBuilder {
                     put("maxItems", task.maxResults)
                 }
             }
+            task.operation == SpyOperation.PUBLIC_PHONE_LOOKUP || task.targetType == TargetType.PHONE_NUMBER || name.contains("phone") || name.contains("contact") -> {
+                buildJsonObject {
+                    putJsonArray("queries") { add(JsonPrimitive(cleanTarget)) }
+                    put("query", cleanTarget)
+                    put("searchTerm", cleanTarget)
+                    put("phone", cleanTarget)
+                    put("maxResults", task.maxResults)
+                }
+            }
             else -> {
                 buildJsonObject {
                     put("username", cleanTarget)

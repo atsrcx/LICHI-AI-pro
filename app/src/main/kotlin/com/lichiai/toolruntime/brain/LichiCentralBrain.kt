@@ -29,7 +29,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.UUID
 import com.lichiai.assistant.resolver.ActiveAssistantResolver
-import com.lichiai.memory.manager.MemoryContextGateway
+import com.lichiai.memory.LlmMemoryManager
 import com.lichiai.util.PromptVars
 
 @Serializable
@@ -224,21 +224,10 @@ PERSONALITY SAFETY BOUNDARY:
             runCatching {
                 memoryRetrieverSeam?.invoke(trimmed, conversationId)
             }.getOrNull().orEmpty()
-        } else if (context != null) {
-            val memoryPack = runCatching {
-                MemoryContextGateway.retrieve(
-                    context = context,
-                    query = trimmed,
-                    conversationId = conversationId,
-                    activeTask = trimmed
-                )
-            }.onFailure {
-                Log.w(TAG, "Memory retrieval failed for Brain context: ${it.message}")
-            }.getOrNull()
-            Log.d(TAG, "Memory context retrieved for Brain: tokenEstimate=${memoryPack?.tokenEstimate ?: 0}, available=${!memoryPack?.formattedPromptContext.isNullOrBlank()}")
-            memoryPack?.formattedPromptContext.orEmpty()
         } else {
-            ""
+            runCatching {
+                LlmMemoryManager.getInstance().getFormattedMemoryContext()
+            }.getOrDefault("")
         }
 
         val conversationTurns = mutableListOf<ChatMessage>()
@@ -644,60 +633,22 @@ PERSONALITY SAFETY BOUNDARY:
         val lower = goal.lowercase()
         val execContext = ToolExecutionContext(conversationId = conversationId, requestId = requestId, userGoal = goal, onProgress = onProgress)
 
-        // Persistent Memory Direct Offline Fallback (Section 61)
+        // Persistent Memory Direct Offline Fallback
         val appContext = context
-        val memoryPack = if (appContext != null) {
+        val allMemories = if (appContext != null) {
             runCatching {
-                MemoryContextGateway.retrieve(appContext, query = goal, conversationId = conversationId, activeTask = goal)
-            }.getOrNull()
-        } else null
+                com.lichiai.memory.data.LichiMemoryDatabase.getInstance(appContext).userMemoryDao().getAllMemories("default_user")
+            }.getOrDefault(emptyList())
+        } else emptyList()
 
-        if (memoryPack != null) {
-            val core = memoryPack.coreProfile
-            // Check direct questions about user name
-            if ((lower.contains("name") || lower.contains("naam")) && (lower.contains("my") || lower.contains("mera") || lower.contains("what") || lower.contains("kya"))) {
-                core?.displayName?.let { name ->
-                    val ans = if (lower.contains("naam") || lower.contains("mera")) "Aapka naam $name hai." else "Your name is $name."
-                    return BrainRunResult(finalSpeech = ans, isSuccess = true, isDirectChat = false, directChatPrompt = ans)
-                }
+        if (allMemories.isNotEmpty()) {
+            val matchingFact = allMemories.firstOrNull { fact ->
+                lower.contains(fact.key.lowercase()) || lower.contains(fact.value.lowercase())
             }
-            // Check residence / relocation
-            if ((lower.contains("live") || lower.contains("rehta") || lower.contains("rahta") || lower.contains("city") || lower.contains("location") || lower.contains("residence")) && (lower.contains("where") || lower.contains("kahan") || lower.contains("pehle") || lower.contains("ab") || lower.contains("current") || lower.contains("previous"))) {
-                if (lower.contains("pehle") || lower.contains("previous") || lower.contains("before") || lower.contains("earlier")) {
-                    core?.previousResidence?.let { prev ->
-                        val ans = if (lower.contains("pehle") || lower.contains("kahan")) "Aap pehle $prev mein rehte the." else "You previously lived in $prev."
-                        return BrainRunResult(finalSpeech = ans, isSuccess = true, isDirectChat = false, directChatPrompt = ans)
-                    }
-                } else {
-                    core?.currentResidence?.let { curr ->
-                        val ans = if (lower.contains("kahan") || lower.contains("rehte")) "Aap abhi $curr mein rehte hain." else "You currently live in $curr."
-                        return BrainRunResult(finalSpeech = ans, isSuccess = true, isDirectChat = false, directChatPrompt = ans)
-                    }
-                }
-            }
-            // Check language preference
-            if ((lower.contains("language") || lower.contains("bhasha") || lower.contains("bol")) && (lower.contains("what") || lower.contains("kis") || lower.contains("prefer") || lower.contains("should"))) {
-                core?.preferredLanguage?.let { lang ->
-                    val ans = if (lower.contains("bhasha") || lower.contains("kis")) "Mujhe aapse $lang mein baat karni chahiye." else "Your preferred language is $lang."
-                    return BrainRunResult(finalSpeech = ans, isSuccess = true, isDirectChat = false, directChatPrompt = ans)
-                }
-            }
-            // Check active project
-            if ((lower.contains("project") || lower.contains("kaam") || lower.contains("working on")) && (lower.contains("what") || lower.contains("kis") || lower.contains("which") || lower.contains("konsa"))) {
-                core?.activeProjects?.firstOrNull()?.let { proj ->
-                    val ans = if (lower.contains("kaam") || lower.contains("konsa")) "Aap $proj project par kaam kar rahe hain." else "You are working on $proj."
-                    return BrainRunResult(finalSpeech = ans, isSuccess = true, isDirectChat = false, directChatPrompt = ans)
-                }
-            }
-            // Check relevant facts if exact match or single fact
-            if (memoryPack.relevantFacts.isNotEmpty()) {
-                val matchingFact = memoryPack.relevantFacts.firstOrNull { fact ->
-                    lower.contains(fact.key.lowercase()) || lower.contains(fact.value.lowercase())
-                } ?: memoryPack.relevantFacts.firstOrNull()
-                if (matchingFact != null && (lower.contains(matchingFact.key.lowercase()) || lower.contains(matchingFact.value.lowercase()) || lower.contains("what") || lower.contains("kya"))) {
-                    val ans = "${matchingFact.key}: ${matchingFact.value}"
-                    return BrainRunResult(finalSpeech = ans, isSuccess = true, isDirectChat = false, directChatPrompt = ans)
-                }
+            if (matchingFact != null && (lower.contains(matchingFact.key.lowercase()) || lower.contains("what") || lower.contains("kya") || lower.contains("batao") || lower.contains("mera") || lower.contains("my"))) {
+                val label = matchingFact.key.replace("_", " ").replaceFirstChar { it.uppercase() }
+                val ans = "$label: ${matchingFact.value}"
+                return BrainRunResult(finalSpeech = ans, isSuccess = true, isDirectChat = false, directChatPrompt = ans)
             }
         }
 

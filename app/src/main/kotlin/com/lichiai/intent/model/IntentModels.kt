@@ -191,7 +191,7 @@ data class IntentContext(
     val lastTerminalCwd: String? = null,
     val lastCallContact: String? = null,
     val lastSelectedSource: String? = null,
-    val memoryPack: com.lichiai.memory.model.MemoryPack? = null,
+    val memoryContext: String = "",
     val inFlightHistory: String = ""
 )
 

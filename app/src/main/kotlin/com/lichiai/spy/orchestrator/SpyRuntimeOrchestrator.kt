@@ -118,22 +118,45 @@ class SpyRuntimeOrchestrator(
 
         // Step 1: Language-aware entity extraction and structured task creation
         onProgress?.invoke(1, 6, "Parsing request...")
-        val task = SpyIntentParser.parse(cleanQuery, requestId = requestId, messageId = messageId)
+        val task = SpyIntentParser.parse(
+            cleanQuery,
+            requestId = requestId,
+            messageId = messageId,
+            isFullScan = triggerResult.isFullScan
+        )
         val maskedTarget = if (task.targetType == TargetType.PHONE_NUMBER) {
             PhoneNumberNormalizer.maskPhoneNumber(task.target)
         } else task.target
 
         Log.i(TAG, "Parsed Spy task: platform=${task.platform}, dynamicRef=${task.dynamicPlatformRef?.key}, mode=${task.lookupMode}, op=${task.operation}, target='$maskedTarget'")
 
-        // Step 2: Public Phone Lookup special route (when platform is UNKNOWN)
-        if (task.targetType == TargetType.PHONE_NUMBER && (task.platform == PlatformType.UNKNOWN || task.platform == PlatformType.GENERIC_WEB)) {
-            onProgress?.invoke(2, 6, "Contact type: Public Phone Number")
-            onProgress?.invoke(3, 6, "Target identified: $maskedTarget")
-            return@withContext PublicContactLookupService.execute(task, onProgress)
-        }
-
         val appSettings = settingsRepository.settings.first()
         val token = appSettings.apifyApiToken.trim()
+        val enabledProviders = providerRepository.getEnabledProviders()
+
+        // Step 2: Public Phone Lookup route with Apify multi-actor and WebIntelligenceManager fallback
+        if (task.targetType == TargetType.PHONE_NUMBER || task.operation == SpyOperation.PUBLIC_PHONE_LOOKUP) {
+            onProgress?.invoke(2, 6, "Contact type: Public Phone Number")
+            onProgress?.invoke(3, 6, "Target identified: $maskedTarget")
+
+            // Check for configured and enabled Apify phone/contact scrapers
+            val phoneProviders = filterCompatibleProviders(enabledProviders, "phone", task)
+                .ifEmpty { filterCompatibleProviders(enabledProviders, "contact", task) }
+
+            if (token.isNotBlank() && phoneProviders.isNotEmpty()) {
+                val apifyResult = when (task.lookupMode) {
+                    SpyLookupMode.SINGLE -> executeSingleMode(task, phoneProviders, appSettings.spyTimeoutSeconds, appSettings.spyMaxDatasetItems, onProgress)
+                    SpyLookupMode.FULL -> executeFullMode(task, phoneProviders, appSettings.spyTimeoutSeconds, appSettings.spyMaxDatasetItems, onProgress)
+                }
+                if (apifyResult.isSuccess && (apifyResult.primaryProfile?.hasGenuineData() == true || apifyResult.normalizedData.isNotEmpty())) {
+                    return@withContext apifyResult
+                }
+                Log.i(TAG, "Apify phone provider returned empty/failure, falling back to PublicContactLookupService")
+            }
+
+            // Fallback to PublicContactLookupService using WebIntelligenceManager (Google Business / Directory Dorking)
+            return@withContext PublicContactLookupService.execute(task, onProgress, context)
+        }
 
         if (token.isBlank()) {
             return@withContext SpyExecutionResult(
@@ -160,7 +183,6 @@ class SpyRuntimeOrchestrator(
         onProgress?.invoke(3, 6, "Target identified: ${task.target}")
 
         // Step 3: Load enabled compatible providers from local Room Registry (Hot Path)
-        val enabledProviders = providerRepository.getEnabledProviders()
         val platformKey = task.dynamicPlatformRef?.key ?: task.platform.id
 
         val compatibleProviders = filterCompatibleProviders(enabledProviders, platformKey, task)

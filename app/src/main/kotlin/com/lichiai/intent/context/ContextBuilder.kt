@@ -70,8 +70,8 @@ class ContextBuilder(
 
         return buildString {
             // 0. User Long-Term Memory & Durable Facts
-            val memoryFormatted = snapshot.memoryPack?.formattedPromptContext
-            if (!memoryFormatted.isNullOrBlank()) {
+            val memoryFormatted = snapshot.memoryContext
+            if (memoryFormatted.isNotBlank()) {
                 val boundedMemory = if (memoryFormatted.length > 2000) memoryFormatted.take(2000).substringBeforeLast('\n') + "\n[Truncated]" else memoryFormatted
                 append("0. USER PERSISTENT MEMORY & FACTS:\n$boundedMemory\n\n")
             }
@@ -138,14 +138,14 @@ class ContextBuilder(
      */
     suspend fun buildContext(
         conversationId: String? = null,
-        memoryPack: com.lichiai.memory.model.MemoryPack? = null,
+        memoryContext: String = "",
         recentHistory: String = ""
     ): IntentContext {
         val currentSnapshot = _contextState.value
         val convId = conversationId?.takeIf { it.isNotBlank() } ?: currentSnapshot.conversationId ?: "default_session"
         _contextState.update { it.copy(
             conversationId = convId,
-            memoryPack = memoryPack ?: it.memoryPack,
+            memoryContext = memoryContext.ifBlank { it.memoryContext },
             inFlightHistory = recentHistory.ifBlank { it.inFlightHistory }
         ) }
         val semanticCtx = continuityEngine.getContext(convId)
@@ -185,7 +185,7 @@ class ContextBuilder(
             lastUsername = activeProfile?.username ?: currentSnapshot.lastUsername,
             lastProfileUrl = activeProfile?.profileUrl ?: currentSnapshot.lastProfileUrl,
             recentTurns = if (semanticCtx.recentTurns.isNotEmpty()) semanticCtx.recentTurns else currentSnapshot.recentTurns,
-            memoryPack = memoryPack ?: currentSnapshot.memoryPack,
+            memoryContext = memoryContext.ifBlank { currentSnapshot.memoryContext },
             inFlightHistory = recentHistory.ifBlank { currentSnapshot.inFlightHistory }
         )
         _contextState.value = newContext

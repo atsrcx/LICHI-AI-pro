@@ -1,7 +1,8 @@
 package com.lichiai.toolruntime.tools
 
 import com.lichiai.intent.model.LichiCapability
-import com.lichiai.memory.manager.LichiMemoryEngine
+import com.lichiai.memory.data.UserMemoryDao
+import com.lichiai.memory.data.UserMemoryEntity
 import com.lichiai.toolruntime.core.LichiTool
 import com.lichiai.toolruntime.model.ToolCall
 import com.lichiai.toolruntime.model.ToolCategory
@@ -13,10 +14,10 @@ import com.lichiai.toolruntime.model.ToolRiskLevel
 import com.lichiai.toolruntime.model.VerificationResult
 
 /**
- * Real Long-Term Memory Search Tool.
+ * Real Long-Term Memory Search Tool using Online LLM Memory DAO.
  */
 class MemorySearchTool(
-    private val memoryEngine: LichiMemoryEngine
+    private val memoryDao: UserMemoryDao
 ) : LichiTool {
 
     override val definition = ToolDefinition(
@@ -42,19 +43,23 @@ class MemorySearchTool(
         }
 
         return try {
-            val pack = memoryEngine.getMemoryPack(query, context.conversationId)
-            val facts = pack.relevantFacts
-            val summary = if (facts.isEmpty()) {
+            val allMemories = memoryDao.getAllMemories("default_user")
+            val filtered = allMemories.filter {
+                it.key.contains(query, ignoreCase = true) ||
+                it.value.contains(query, ignoreCase = true) ||
+                it.category.contains(query, ignoreCase = true)
+            }
+            val summary = if (filtered.isEmpty()) {
                 "No past memories found matching '$query'."
             } else {
-                "Retrieved memories for '$query':\n" + facts.take(5).joinToString("\n") { "• ${it.key}: ${it.value}" }
+                "Retrieved memories for '$query':\n" + filtered.take(5).joinToString("\n") { "• ${it.key}: ${it.value}" }
             }
             ToolResult.success(
                 callId = call.callId,
                 toolId = definition.id,
                 summary = summary,
-                data = mapOf("count" to facts.size.toString()),
-                rawOutput = pack.formattedPromptContext
+                data = mapOf("count" to filtered.size.toString()),
+                rawOutput = summary
             )
         } catch (e: Exception) {
             ToolResult.failure(call.callId, definition.id, "Memory search failed: ${e.message}")
@@ -64,17 +69,17 @@ class MemorySearchTool(
     override suspend fun verify(call: ToolCall, result: ToolResult, context: ToolExecutionContext): VerificationResult {
         return VerificationResult(
             isVerified = result.isSuccess,
-            verifiedState = "Queried LichiMemoryEngine",
-            notes = "Memory engine search verified"
+            verifiedState = "Queried UserMemoryDao",
+            notes = "Memory search verified"
         )
     }
 }
 
 /**
- * Real Long-Term Memory Store Tool.
+ * Real Long-Term Memory Store Tool using Online LLM Memory DAO.
  */
 class MemoryStoreTool(
-    private val memoryEngine: LichiMemoryEngine
+    private val memoryDao: UserMemoryDao
 ) : LichiTool {
 
     override val definition = ToolDefinition(
@@ -85,7 +90,9 @@ class MemoryStoreTool(
         category = ToolCategory.MEMORY,
         mappedCapability = LichiCapability.CHAT,
         parameters = listOf(
-            ToolParameter("fact", "string", "The statement or preference to remember", required = true)
+            ToolParameter("key", "string", "Key or canonical name of the fact (e.g. 'name', 'favorite_color', 'residence')", required = true),
+            ToolParameter("value", "string", "The value or statement to remember", required = true),
+            ToolParameter("category", "string", "Optional category: identity, preference, project, work", required = false)
         ),
         riskLevel = ToolRiskLevel.LOW_RISK_STATE_CHANGE,
         requiresConfirmation = false,
@@ -95,23 +102,32 @@ class MemoryStoreTool(
     )
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val fact = call.arguments["fact"]?.trim() ?: ""
-        if (fact.isBlank()) {
-            return ToolResult.failure(call.callId, definition.id, "Fact to store is empty.")
+        val key = call.arguments["key"]?.trim()?.lowercase()?.replace(" ", "_") ?: ""
+        val value = call.arguments["value"]?.trim() ?: call.arguments["fact"]?.trim() ?: ""
+        val category = call.arguments["category"]?.trim() ?: "general"
+        val userId = "default_user"
+
+        if (key.isBlank() && value.isBlank()) {
+            return ToolResult.failure(call.callId, definition.id, "Fact or key to store is empty.")
         }
 
+        val effectiveKey = if (key.isBlank()) "fact_${System.currentTimeMillis()}" else key
+
         return try {
-            memoryEngine.recordTurn(
-                conversationId = context.conversationId,
-                messageId = java.util.UUID.randomUUID().toString(),
-                role = "user",
-                content = fact
+            val entity = UserMemoryEntity(
+                id = "${userId}_$effectiveKey",
+                userId = userId,
+                key = effectiveKey,
+                value = value,
+                category = category,
+                updatedAt = System.currentTimeMillis()
             )
+            memoryDao.upsertMemory(entity)
             ToolResult.success(
                 callId = call.callId,
                 toolId = definition.id,
-                summary = "Remembered: '$fact'",
-                data = mapOf("stored_fact" to fact)
+                summary = "Remembered: '$effectiveKey' = '$value'",
+                data = mapOf("key" to effectiveKey, "value" to value)
             )
         } catch (e: Exception) {
             ToolResult.failure(call.callId, definition.id, "Failed to store memory: ${e.message}")
@@ -126,15 +142,11 @@ class MemoryStoreTool(
                 notes = "MemoryStoreTool execution was not marked as successful"
             )
         }
-        val fact = call.arguments["fact"]?.trim().orEmpty()
+        val key = call.arguments["key"]?.trim()?.lowercase()?.replace(" ", "_") ?: ""
+        val userId = "default_user"
         return try {
-            val userTurns = memoryEngine.database.rawLedgerDao().getTurns(context.conversationId)
-            val foundInLedger = userTurns.any { it.verbatimContent.contains(fact, ignoreCase = true) }
-            val pack = memoryEngine.getMemoryPack(fact, context.conversationId)
-            val foundInItems = pack.relevantFacts.any { it.value.contains(fact, ignoreCase = true) || fact.contains(it.value, ignoreCase = true) } ||
-                    pack.relevantPreferences.any { it.value.contains(fact, ignoreCase = true) || fact.contains(it.value, ignoreCase = true) }
-
-            if (foundInLedger || foundInItems || pack.coreProfile?.displayName?.equals(fact, ignoreCase = true) == true) {
+            val stored = memoryDao.getMemoryByKey(userId, key)
+            if (stored != null) {
                 VerificationResult(
                     isVerified = true,
                     verifiedState = "PERSISTED_AND_VERIFIED",
@@ -144,7 +156,7 @@ class MemoryStoreTool(
                 VerificationResult(
                     isVerified = false,
                     verifiedState = "READ_BACK_MISMATCH",
-                    notes = "Deterministic database read-back could not find stored memory in raw ledger or active memory items."
+                    notes = "Deterministic database read-back could not find stored memory."
                 )
             }
         } catch (e: Exception) {
@@ -158,22 +170,21 @@ class MemoryStoreTool(
 }
 
 /**
- * Real Long-Term Memory Forget / Tombstone Tool.
+ * Real Long-Term Memory Forget Tool.
  */
 class MemoryForgetTool(
-    private val memoryEngine: LichiMemoryEngine
+    private val memoryDao: UserMemoryDao
 ) : LichiTool {
 
     override val definition = ToolDefinition(
         id = "memory.forget",
         name = "Forget Memory Fact",
-        description = "Deletes, forgets, or tombstones a personal fact, residence, preference, or detail from long-term memory.",
-        purpose = "Execute explicit user forget request and prevent data resurrection across memory.",
+        description = "Deletes or forgets a personal fact, residence, preference, or detail from long-term memory.",
+        purpose = "Execute explicit user forget request and remove persistent fact.",
         category = ToolCategory.MEMORY,
         mappedCapability = LichiCapability.CHAT,
         parameters = listOf(
-            ToolParameter("query", "string", "Text or description of the fact/detail to forget", required = true),
-            ToolParameter("target_entity", "string", "Optional specific entity canonical name or key", required = false)
+            ToolParameter("key", "string", "Key or description of the fact to forget (e.g. 'favorite_color', 'residence')", required = true)
         ),
         riskLevel = ToolRiskLevel.LOW_RISK_STATE_CHANGE,
         requiresConfirmation = false,
@@ -183,28 +194,20 @@ class MemoryForgetTool(
     )
 
     override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
-        val query = call.arguments["query"]?.trim() ?: context.userGoal
-        val targetEntity = call.arguments["target_entity"]?.trim()
-        if (query.isBlank() && targetEntity.isNullOrBlank()) {
-            return ToolResult.failure(call.callId, definition.id, "Target memory to forget is empty.")
+        val key = (call.arguments["key"] ?: call.arguments["query"] ?: call.arguments["target_entity"])?.trim()?.lowercase()?.replace(" ", "_") ?: ""
+        val userId = "default_user"
+        if (key.isBlank()) {
+            return ToolResult.failure(call.callId, definition.id, "Target memory key to forget is empty.")
         }
 
         return try {
-            val success = memoryEngine.tombstoneMemoryByDescription(
-                description = query,
-                targetEntity = targetEntity,
-                conversationId = context.conversationId
+            val deleted = memoryDao.deleteMemoryByKey(userId, key)
+            ToolResult.success(
+                callId = call.callId,
+                toolId = definition.id,
+                summary = "Successfully forgotten '$key'. ($deleted records removed)",
+                data = mapOf("deleted_key" to key, "count" to deleted.toString())
             )
-            if (success) {
-                ToolResult.success(
-                    callId = call.callId,
-                    toolId = definition.id,
-                    summary = "Successfully forgotten: '${targetEntity ?: query}'.",
-                    data = mapOf("forgotten" to (targetEntity ?: query))
-                )
-            } else {
-                ToolResult.failure(call.callId, definition.id, "Could not process forget request.")
-            }
         } catch (e: Exception) {
             ToolResult.failure(call.callId, definition.id, "Failed to forget memory: ${e.message}")
         }
@@ -218,13 +221,13 @@ class MemoryForgetTool(
                 notes = "MemoryForgetTool execution was not successful"
             )
         }
-        val query = call.arguments["query"]?.trim() ?: ""
-        val target = call.arguments["target_entity"]?.trim() ?: query
-        val isTombstoned = memoryEngine.tombstoneManager.isTombstoned(target)
+        val key = (call.arguments["key"] ?: call.arguments["query"] ?: call.arguments["target_entity"])?.trim()?.lowercase()?.replace(" ", "_") ?: ""
+        val userId = "default_user"
+        val remaining = memoryDao.getMemoryByKey(userId, key)
         return VerificationResult(
-            isVerified = isTombstoned,
-            verifiedState = if (isTombstoned) "TOMBSTONED_AND_VERIFIED" else "TOMBSTONE_VERIFICATION_FAILED",
-            notes = if (isTombstoned) "Amnesia tombstone verified in memory cache" else "Tombstone record not found in cache"
+            isVerified = remaining == null,
+            verifiedState = if (remaining == null) "FORGOTTEN_AND_VERIFIED" else "STILL_EXISTS",
+            notes = if (remaining == null) "Confirmed memory key is removed" else "Memory key still exists in DAO"
         )
     }
 }

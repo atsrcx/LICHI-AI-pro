@@ -248,14 +248,9 @@ class VoiceConversationOrchestrator(
                     if (assistants.isNotEmpty()) assistants else (activeAssistant?.let { listOf(it) } ?: emptyList())
                 )
 
-                val memoryPack = runCatching {
-                    com.lichiai.memory.manager.MemoryContextGateway.retrieve(
-                        context = context,
-                        query = "Live Voice Session",
-                        conversationId = activeConvId
-                    )
-                }.getOrNull()
-                val memoryContextPrompt = memoryPack?.formattedPromptContext ?: ""
+                val memoryContextPrompt = runCatching {
+                    com.lichiai.memory.LlmMemoryManager.getInstance().getFormattedMemoryContext()
+                }.getOrDefault("")
 
                 val semanticContext = com.lichiai.context.engine.UniversalContextContinuityEngine.getInstance().getContext(activeConvId ?: "default_session")
                 val contextFactPrompt = if (semanticContext.verifiedFacts.isNotEmpty()) {
@@ -611,16 +606,9 @@ class VoiceConversationOrchestrator(
                 }
 
                 val activeConvId = activeConversationIdProvider()
-                val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(context).getCurrentUserId()
-                val memoryPack = runCatching {
-                    com.lichiai.memory.manager.MemoryContextGateway.retrieve(
-                        context = context,
-                        query = userQuery,
-                        conversationId = activeConvId,
-                        userId = currentUserId
-                    )
-                }.getOrNull()
-                val memoryContextPrompt = memoryPack?.formattedPromptContext ?: ""
+                val memoryContextPrompt = runCatching {
+                    com.lichiai.memory.LlmMemoryManager.getInstance().getFormattedMemoryContext()
+                }.getOrDefault("")
 
                 val semanticContext = com.lichiai.context.engine.UniversalContextContinuityEngine.getInstance().getContext(activeConvId ?: "default_session")
                 val contextFactPrompt = if (semanticContext.verifiedFacts.isNotEmpty()) {
@@ -668,22 +656,14 @@ class VoiceConversationOrchestrator(
                             saveTurnToConversation(userText = userQuery, assistantText = assistantFinal)
                             val resolvedConvId = activeConvId ?: "default_session"
                             runCatching {
-                                com.lichiai.memory.manager.MemoryContextGateway.recordTurn(
-                                    context = context,
-                                    conversationId = resolvedConvId,
-                                    messageId = "voice_${System.currentTimeMillis()}",
-                                    role = "user",
-                                    content = userQuery
+                                com.lichiai.memory.LlmMemoryManager.getInstance().inspectAndExtract(
+                                    userId = "default_user",
+                                    userMessage = userQuery,
+                                    assistantResponse = assistantFinal,
+                                    provider = provider,
+                                    modelId = modelToUse,
+                                    llmClient = llmClient
                                 )
-                                if (assistantFinal.isNotBlank()) {
-                                    com.lichiai.memory.manager.MemoryContextGateway.recordTurnAsync(
-                                        context = context,
-                                        conversationId = resolvedConvId,
-                                        messageId = "voice_${System.currentTimeMillis() + 1}",
-                                        role = "assistant",
-                                        content = assistantFinal
-                                    )
-                                }
                             }
                             com.lichiai.context.engine.UniversalContextContinuityEngine.getInstance().recordExecution(
                                 conversationId = resolvedConvId,
@@ -804,25 +784,6 @@ class VoiceConversationOrchestrator(
                         )
                     }
                 store.upsert(updated)
-                val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(context).getCurrentUserId()
-                com.lichiai.memory.manager.MemoryContextGateway.recordTurn(
-                    context = context,
-                    conversationId = currentConvId,
-                    messageId = userMsg.id,
-                    role = "user",
-                    content = userTrimmed,
-                    timestamp = now,
-                    userId = currentUserId
-                )
-                com.lichiai.memory.manager.MemoryContextGateway.recordTurn(
-                    context = context,
-                    conversationId = currentConvId,
-                    messageId = assistantMsg.id,
-                    role = "assistant",
-                    content = assistantTrimmed,
-                    timestamp = now + 1,
-                    userId = currentUserId
-                )
             } catch (e: Exception) {
                 android.util.Log.e("VoiceOrchestrator", "Failed to save voice turn to conversation", e)
             }

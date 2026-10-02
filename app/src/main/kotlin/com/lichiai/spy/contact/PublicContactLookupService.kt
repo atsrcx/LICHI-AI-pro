@@ -27,7 +27,8 @@ object PublicContactLookupService {
 
     suspend fun execute(
         task: SpyTask,
-        onProgress: ((step: Int, total: Int, statusText: String) -> Unit)? = null
+        onProgress: ((step: Int, total: Int, statusText: String) -> Unit)? = null,
+        context: android.content.Context? = null
     ): SpyExecutionResult = withContext(Dispatchers.IO) {
         val rawTarget = task.target.trim()
         val maskedTarget = PhoneNumberNormalizer.maskPhoneNumber(rawTarget)
@@ -54,10 +55,43 @@ object PublicContactLookupService {
 
         onProgress?.invoke(5, 6, "Verifying public business listings...")
 
-        // Public business contact discovery policy:
-        // When no external public enterprise directory is configured, return clean, structured NO_RESULT response.
-        // Never expose internal Apify Actor Store errors ("No compatible Actor found in Store for Unknown").
+        // Attempt live public business directory dorking if context is available
+        var discoveredProfile: PlatformProfile? = null
+        if (context != null) {
+            try {
+                val service = com.lichiai.spy.service.PublicContactLookupService(context)
+                discoveredProfile = if (task.targetType == TargetType.EMAIL || task.operation == SpyOperation.PUBLIC_EMAIL_LOOKUP) {
+                    service.lookupPublicEmail(rawTarget)
+                } else {
+                    service.lookupPublicPhone(normalizedPhone.ifBlank { rawTarget })
+                }
+            } catch (e: Exception) {
+                Log.w(TAG, "Public business directory dorking fallback encountered error: ${e.message}")
+            }
+        }
 
+        if (discoveredProfile != null && discoveredProfile.displayName.isNotBlank()) {
+            val sb = StringBuilder()
+            sb.append("📱 **Verified Public Business Intelligence**\n\n")
+            sb.append("• **Target Number:** `$displayPhone`\n")
+            sb.append("• **Business / Entity:** ${discoveredProfile.displayName}\n")
+            if (discoveredProfile.bio.isNotBlank()) sb.append("• **Overview:** ${discoveredProfile.bio}\n")
+            if (discoveredProfile.website.isNotBlank()) sb.append("• **Website / Source:** ${discoveredProfile.website}\n")
+            if (discoveredProfile.publicPhone.isNotBlank()) sb.append("• **Public Contact:** ${discoveredProfile.publicPhone}\n")
+            if (discoveredProfile.profileUrl.isNotBlank()) sb.append("• **Reference:** ${discoveredProfile.profileUrl}\n\n")
+            sb.append("*Source: Public Directory Registry & Verified Enterprise Listings (Zero Private Surveillance Policy)*")
+
+            return@withContext SpyExecutionResult(
+                speech = sb.toString().trim(),
+                isSuccess = true,
+                status = SpyTaskStatus.COMPLETED,
+                task = task,
+                primaryProfile = discoveredProfile,
+                profiles = listOf(discoveredProfile)
+            )
+        }
+
+        // Clean, privacy-safe fallback when no business registry record is found
         val formattedResult = buildString {
             append("📱 **Public Contact Intelligence**\n\n")
             append("• **Target Number:** `$displayPhone`\n")
@@ -74,9 +108,9 @@ object PublicContactLookupService {
             task = task,
             primaryProfile = PlatformProfile(
                 platform = PlatformType.UNKNOWN,
-                username = displayPhone,
+                username = normalizedPhone.ifBlank { rawTarget },
                 displayName = "Public Number $displayPhone",
-                publicPhone = displayPhone
+                publicPhone = normalizedPhone.ifBlank { rawTarget }
             ),
             profiles = emptyList()
         )

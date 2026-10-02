@@ -88,7 +88,7 @@ class UniversalTaskOrchestratorV2(
         terminalManager = com.lichiai.terminal.core.TerminalManager.getInstance(context),
         reminderManager = com.lichiai.time.manager.ReminderManager(context),
         timeCapabilityAdapter = com.lichiai.time.adapter.TimeCapabilityAdapter(context),
-        memoryEngine = com.lichiai.memory.manager.LichiMemoryEngine.getInstance(context),
+        memoryDao = com.lichiai.memory.data.LichiMemoryDatabase.getInstance(context).userMemoryDao(),
         skillRepository = com.lichiai.skill.repository.SkillRepository.getInstance(context),
         onNavigateToBrowser = onNavigateToBrowser.takeIf { it != {} } ?: (routeDispatcher?.onNavigateToBrowser ?: {}),
         onNavigateToTerminal = onNavigateToTerminal.takeIf { it != {} } ?: (routeDispatcher?.onNavigateToTerminal ?: {})
@@ -124,16 +124,12 @@ class UniversalTaskOrchestratorV2(
         val convId = conversationId.ifBlank { context?.conversationId ?: "default_session" }
         val activeContext = context ?: contextBuilder.buildContext(convId)
 
-        // 0. AMNESIA & FORGET SUBSYSTEM ROUTE
-        val memoryEngine = com.lichiai.memory.manager.LichiMemoryEngine.getInstance(this@UniversalTaskOrchestratorV2.context)
-        val forgetTarget = memoryEngine.tombstoneManager.parseForgetIntent(trimmed)
-        if (forgetTarget != null) {
-            val resolvedUserId = com.lichiai.memory.identity.UserIdentityManager.getStableUserId(this@UniversalTaskOrchestratorV2.context)
-            memoryEngine.tombstoneMemoryByDescription(
-                description = forgetTarget,
-                conversationId = convId,
-                userId = resolvedUserId
-            )
+        // 0. FORGET SUBSYSTEM ROUTE
+        val lower = trimmed.lowercase()
+        if (lower.startsWith("forget ") || lower.contains("bhool jao") || lower.startsWith("delete memory")) {
+            val keyToForget = lower.removePrefix("forget ").removePrefix("delete memory ").replace("mera ", "").replace("my ", "").trim().replace(" ", "_")
+            val memoryDao = com.lichiai.memory.data.LichiMemoryDatabase.getInstance(this@UniversalTaskOrchestratorV2.context).userMemoryDao()
+            memoryDao.deleteMemoryByKey("default_user", keyToForget)
             return@withContext OrchestrationResult(
                 finalSpeech = "I have forgotten that information and deleted it from your persistent memory.",
                 isSuccess = true,

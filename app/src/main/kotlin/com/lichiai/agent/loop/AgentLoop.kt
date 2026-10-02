@@ -100,16 +100,9 @@ class AgentLoop(
             matchedSkills.joinToString("\n\n") { it.toAgentContextString() }
         } else ""
 
-        val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(context).getCurrentUserId()
-        val memoryPack = runCatching {
-            com.lichiai.memory.manager.MemoryContextGateway.retrieve(
-                context = context,
-                query = userGoal,
-                userId = currentUserId,
-                activeTask = userGoal
-            )
-        }.getOrNull()
-        val memoryContext = memoryPack?.formattedPromptContext.orEmpty()
+        val memoryContext = runCatching {
+            com.lichiai.memory.LlmMemoryManager.getInstance().getFormattedMemoryContext()
+        }.getOrDefault("")
 
         val initialActivity = if (matchedSkills.isNotEmpty()) {
             "Applying ${matchedSkills.first().name}..."

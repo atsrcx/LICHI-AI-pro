@@ -14,7 +14,6 @@ import com.lichiai.browser.perception.BrowserPerceptionLayer
 import com.lichiai.browser.perception.PagePerceptionSnapshot
 import com.lichiai.browser.recovery.BrowserRecovery
 import com.lichiai.browser.security.WebSecuritySanitizer
-import com.lichiai.memory.manager.LichiMemoryEngine
 import com.lichiai.ui.activity.ActivityKind
 import com.lichiai.ui.activity.AssistantActivityState
 import com.lichiai.web.WebIntelligenceManager
@@ -50,7 +49,6 @@ class BrowserIntelligencePlatform(
     val browserController: BrowserController,
     val webIntelligenceManager: WebIntelligenceManager
 ) {
-    private val memoryEngine: LichiMemoryEngine = LichiMemoryEngine.getInstance(context)
     val perceptionLayer: BrowserPerceptionLayer = BrowserPerceptionLayer()
     val actionEngine: BrowserActionEngine = BrowserActionEngine(
         browserController = browserController,
@@ -174,16 +172,6 @@ class BrowserIntelligencePlatform(
             }
         )
 
-        // Persist to Memory OS
-        if (conversationId.isNotBlank() && messageId.isNotBlank()) {
-            memoryEngine.recordTurnAsync(
-                conversationId = conversationId,
-                messageId = messageId,
-                role = "assistant",
-                content = report.synthesisText
-            )
-        }
-
         onActivityUpdate?.invoke(
             AssistantActivityState(
                 kind = ActivityKind.COMPLETED,
@@ -214,15 +202,6 @@ class BrowserIntelligencePlatform(
             )
         )
         val report = researchEngine.conductResearch(topic, queries)
-
-        if (conversationId.isNotBlank() && messageId.isNotBlank()) {
-            memoryEngine.recordTurnAsync(
-                conversationId = conversationId,
-                messageId = messageId,
-                role = "assistant",
-                content = report.finalAnswer
-            )
-        }
 
         onActivityUpdate?.invoke(
             AssistantActivityState(

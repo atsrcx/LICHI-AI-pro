@@ -91,11 +91,11 @@ class RouteDispatcher(
                 DispatchExecutionResult.FallbackChat(intent.naturalAcknowledgment)
             }
             is ResolvedIntent.NormalChat -> {
-                val memEngine = com.lichiai.memory.manager.LichiMemoryEngine.getInstance(context)
-                val forgetTarget = memEngine.tombstoneManager.parseForgetIntent(intent.prompt)
-                if (forgetTarget != null) {
-                    val userId = com.lichiai.memory.identity.UserIdentityManager.getStableUserId(context)
-                    memEngine.tombstoneMemoryByDescription(forgetTarget, userId = userId)
+                val lower = intent.prompt.lowercase()
+                if (lower.startsWith("forget ") || lower.contains("bhool jao") || lower.startsWith("delete memory")) {
+                    val keyToForget = lower.removePrefix("forget ").removePrefix("delete memory ").replace("mera ", "").replace("my ", "").trim().replace(" ", "_")
+                    val memoryDao = com.lichiai.memory.data.LichiMemoryDatabase.getInstance(context).userMemoryDao()
+                    memoryDao.deleteMemoryByKey("default_user", keyToForget)
                     DispatchExecutionResult.FallbackChat("I have forgotten that information and deleted it from your persistent memory.")
                 } else {
                     DispatchExecutionResult.FallbackChat(intent.prompt)

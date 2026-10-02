@@ -6,7 +6,8 @@ import com.lichiai.agent.executor.AgentActionExecutor
 import com.lichiai.browser.BrowserController
 import com.lichiai.calling.action.CallActionExecutor
 import com.lichiai.calling.engine.UniversalCallEngine
-import com.lichiai.memory.manager.LichiMemoryEngine
+import com.lichiai.memory.data.LichiMemoryDatabase
+import com.lichiai.memory.data.UserMemoryDao
 import com.lichiai.skill.repository.SkillRepository
 import com.lichiai.terminal.core.TerminalManager
 import com.lichiai.terminal.task.TerminalTaskManager
@@ -55,7 +56,7 @@ class UnifiedToolRegistry(
     val terminalManager: TerminalManager? = context?.let { TerminalManager.getInstance(it) },
     val reminderManager: ReminderManager? = context?.let { ReminderManager(it) },
     val timeCapabilityAdapter: TimeCapabilityAdapter? = context?.let { TimeCapabilityAdapter(it) },
-    val memoryEngine: LichiMemoryEngine? = context?.let { LichiMemoryEngine.getInstance(it) },
+    val memoryDao: UserMemoryDao? = context?.let { LichiMemoryDatabase.getInstance(it).userMemoryDao() },
     val skillRepository: SkillRepository? = context?.let { SkillRepository.getInstance(it) },
     val onNavigateToBrowser: () -> Unit = {},
     val onNavigateToTerminal: () -> Unit = {}
@@ -118,7 +119,7 @@ class UnifiedToolRegistry(
         }
 
         // Memory
-        memoryEngine?.let {
+        memoryDao?.let {
             register(MemorySearchTool(it))
             register(MemoryStoreTool(it))
             register(MemoryForgetTool(it))

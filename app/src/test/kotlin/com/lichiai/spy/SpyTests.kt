@@ -474,4 +474,71 @@ class SpyTests {
         assertTrue(html.contains("125.0K"))
         assertTrue(html.contains("Platform Intelligence Report"))
     }
+
+    @Test
+    fun testSpyPhoneLookup_FullScanAndStandardFormat() {
+        val query = "#Spy +919876543210 --full"
+        assertTrue(SpyGate.isSpyCommand(query))
+
+        val trigger = SpyGate.checkTrigger(query)
+        assertTrue(trigger is SpyGateResult.Triggered)
+        val triggered = trigger as SpyGateResult.Triggered
+        assertEquals("+919876543210", triggered.cleanQuery)
+        assertTrue(triggered.isFullScan)
+
+        val task = SpyIntentParser.parse(
+            cleanQuery = triggered.cleanQuery,
+            isFullScan = triggered.isFullScan
+        )
+        assertEquals(TargetType.PHONE_NUMBER, task.targetType)
+        assertEquals(SpyOperation.PUBLIC_PHONE_LOOKUP, task.operation)
+        assertEquals("+919876543210", task.target)
+        assertEquals(com.lichiai.spy.core.SpyLookupMode.FULL, task.lookupMode)
+        assertTrue(task.isFullScan)
+
+        // Verify PublicContactLookupService executes without throwing invalid target errors
+        val result = runBlocking { PublicContactLookupService.execute(task) }
+        assertTrue(result.isSuccess)
+        assertTrue(result.speech.contains("Public Contact Intelligence"))
+        assertNotNull(result.primaryProfile)
+        assertEquals("+919876543210", result.primaryProfile?.username)
+    }
+
+    @Test
+    fun testStandardQueriesWithoutSpy_BypassesSubsystem() {
+        assertFalse(SpyGate.isSpyCommand("Rahul ko call karo"))
+        assertFalse(SpyGate.isSpyCommand("9876543210"))
+        assertFalse(SpyGate.isSpyCommand("+919876543210"))
+        assertFalse(SpyGate.isSpyCommand("Search for recent AI news"))
+        assertFalse(SpyGate.isSpyCommand("What is the weather in Delhi?"))
+
+        val trigger1 = SpyGate.checkTrigger("Rahul ko call karo")
+        assertTrue(trigger1 is SpyGateResult.NotTriggered)
+
+        val trigger2 = SpyGate.checkTrigger("+919876543210")
+        assertTrue(trigger2 is SpyGateResult.NotTriggered)
+    }
+
+    @Test
+    fun testParserPackage_Components() {
+        val rawInput = "#Spy +919876543210 --full"
+        val (clean, isFull) = com.lichiai.spy.parser.SpyGate.extractPayload(rawInput)
+        assertEquals("+919876543210", clean)
+        assertTrue(isFull)
+
+        val extracted = com.lichiai.spy.parser.TargetExtractor.extract(clean)
+        assertEquals("+919876543210", extracted.cleanTarget)
+        assertEquals(com.lichiai.spy.parser.TargetExtractor.TargetType.PHONE, extracted.detectedType)
+
+        val parsedTask = com.lichiai.spy.parser.SpyIntentParser.parse(rawInput)
+        assertNotNull(parsedTask)
+        assertEquals(com.lichiai.spy.model.SpyPlatform.PHONE_DIRECTORY, parsedTask?.platform)
+        assertEquals(com.lichiai.spy.model.SpyOperation.PUBLIC_PHONE_LOOKUP, parsedTask?.operation)
+        assertEquals("+919876543210", parsedTask?.target)
+        assertTrue(parsedTask?.isFullScan == true)
+
+        val inputBuilder = com.lichiai.spy.input.ActorInputBuilder()
+        val jsonPayload = inputBuilder.build("apify/google-search-scraper", parsedTask!!)
+        assertTrue(jsonPayload.contains("+919876543210"))
+    }
 }

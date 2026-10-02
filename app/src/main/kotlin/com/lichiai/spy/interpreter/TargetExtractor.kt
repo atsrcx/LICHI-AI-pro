@@ -57,12 +57,36 @@ object TargetExtractor {
      * Attempts to extract a valid phone number from the query.
      */
     fun extractPhoneNumber(query: String): String? {
+        // 1. Direct international E.164 with leading + check
+        val plusMatch = Regex("""\+\d[\d\s\-().]{6,20}\d""").find(query)
+        if (plusMatch != null) {
+            val candidate = plusMatch.value.trim()
+            val digitsOnly = candidate.filter { it.isDigit() }
+            if (digitsOnly.length in 7..15) {
+                return "+$digitsOnly"
+            }
+        }
+
+        // 2. Pattern match
         val matches = PHONE_PATTERN.findAll(query)
         for (match in matches) {
             val candidate = match.value.trim()
             val digitsOnly = candidate.filter { it.isDigit() }
             if (digitsOnly.length in 7..15) {
-                return PhoneNumberNormalizer.normalize(candidate)
+                val normalized = PhoneNumberNormalizer.normalize(candidate)
+                return if (candidate.startsWith("+") && !normalized.startsWith("+")) {
+                    "+$normalized"
+                } else normalized
+            }
+        }
+
+        // 3. Standalone phone token check (tokens with dashes/spaces/parentheses)
+        val tokens = query.split(Regex("""[\s,;]+""")).filter { it.isNotBlank() }
+        for (token in tokens) {
+            val clean = token.trim('(', ')', '[', ']', '"', '\'', ',', '.', ';', ':')
+            val digitsOnly = clean.filter { it.isDigit() }
+            if (digitsOnly.length in 7..15 && clean.all { it.isDigit() || it in "+-()." }) {
+                return if (clean.startsWith("+")) "+$digitsOnly" else digitsOnly
             }
         }
         return null

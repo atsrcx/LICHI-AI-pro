@@ -1,7 +1,11 @@
 package com.lichiai.spy.core
 
 sealed class SpyGateResult {
-    data class Triggered(val cleanQuery: String, val rawInput: String) : SpyGateResult()
+    data class Triggered(
+        val cleanQuery: String,
+        val rawInput: String,
+        val isFullScan: Boolean = false
+    ) : SpyGateResult()
     object NotTriggered : SpyGateResult()
 }
 
@@ -44,8 +48,8 @@ object SpyGate {
 
     fun checkTrigger(input: String): SpyGateResult {
         if (!isSpyCommand(input)) return SpyGateResult.NotTriggered
-        val (clean, _) = extractPayload(input)
-        return SpyGateResult.Triggered(cleanQuery = clean, rawInput = input)
+        val (clean, isFullScan) = extractPayload(input)
+        return SpyGateResult.Triggered(cleanQuery = clean, rawInput = input, isFullScan = isFullScan)
     }
 
     fun isSpyTriggered(input: String): Boolean {

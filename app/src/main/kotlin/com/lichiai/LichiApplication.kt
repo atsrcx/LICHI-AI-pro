@@ -42,21 +42,10 @@ class LichiApplication : Application() {
         } catch (_: Throwable) {}
 
         try {
-            val consolidationRequest = androidx.work.PeriodicWorkRequestBuilder<com.lichiai.memory.worker.MemoryConsolidationWorker>(
-                24, java.util.concurrent.TimeUnit.HOURS
-            ).setConstraints(
-                androidx.work.Constraints.Builder()
-                    .setRequiresBatteryNotLow(true)
-                    .setRequiresDeviceIdle(true)
-                    .build()
-            ).build()
-            androidx.work.WorkManager.getInstance(this).enqueueUniquePeriodicWork(
-                "LichiMemoryConsolidation",
-                androidx.work.ExistingPeriodicWorkPolicy.KEEP,
-                consolidationRequest
-            )
+            val db = com.lichiai.memory.data.LichiMemoryDatabase.getInstance(this)
+            com.lichiai.memory.LlmMemoryManager.init(this, db.userMemoryDao())
         } catch (e: Throwable) {
-            android.util.Log.w("LichiApplication", "WorkManager memory consolidation schedule failed: ${e.message}")
+            android.util.Log.w("LichiApplication", "LlmMemoryManager init failed: ${e.message}")
         }
     }
 }
