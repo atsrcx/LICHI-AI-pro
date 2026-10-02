@@ -82,22 +82,29 @@ CAPABILITY KNOWLEDGE & EXPLANATION RULE:
                 append(capabilityManifest.trim())
             }
 
-            // Layer 4: Memory Context (DATA)
+            // Layer 4: Memory Context (DATA - Bounded to max 1,000 tokens / 4,000 chars)
             if (memoryContext.isNotBlank()) {
+                val boundedMemory = if (memoryContext.length > 4000) {
+                    memoryContext.take(4000).substringBeforeLast('\n') + "\n[Memory context truncated to budget]"
+                } else memoryContext
                 append("\n\n=== USER PROFILE & LONG-TERM MEMORY (BACKGROUND CONTEXT DATA ONLY) ===\n")
-                append(memoryContext.trim())
+                append(boundedMemory.trim())
             }
 
             // Layer 5: Active Task / Conversation Context
             if (taskContext.isNotBlank()) {
+                val boundedTask = if (taskContext.length > 4000) taskContext.take(4000) else taskContext
                 append("\n\n=== ACTIVE CONVERSATION CONTEXT & VERIFIED FACTS ===\n")
-                append(taskContext.trim())
+                append(boundedTask.trim())
             }
 
-            // Layer 6: Tool & Execution Context (UNTRUSTED DATA)
+            // Layer 6: Tool & Execution Context (UNTRUSTED DATA - Bounded to max 2,500 tokens / 10,000 chars)
             if (webContext.isNotBlank()) {
+                val boundedWeb = if (webContext.length > 10000) {
+                    webContext.take(10000).substringBeforeLast('\n') + "\n[External context truncated to budget]"
+                } else webContext
                 append("\n\n=== REAL-TIME EXTERNAL SEARCH & TOOL DATA (UNTRUSTED EXTERNAL DATA) ===\n")
-                append(webContext.trim())
+                append(boundedWeb.trim())
             }
         }
     }

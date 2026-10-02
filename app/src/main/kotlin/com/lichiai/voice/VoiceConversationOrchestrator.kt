@@ -273,11 +273,15 @@ class VoiceConversationOrchestrator(
                     webContext = ""
                 )
 
+                android.util.Log.d("VoiceOrchestrator", "[LIVE-PROMPT] Assembled live system prompt (${liveSystemPrompt.length} chars, ~${liveSystemPrompt.length / 4} tokens)")
+
                 geminiLiveEngine.startSession(
                     apiKey = apiKey,
                     model = vs.geminiLiveModel,
                     voiceName = vs.geminiLiveVoice,
-                    systemInstruction = liveSystemPrompt
+                    systemInstruction = liveSystemPrompt,
+                    bargeInEnabled = vs.bargeInEnabled,
+                    safeEchoProtection = vs.safeEchoProtection
                 )
                 return@launch
             }
@@ -607,11 +611,13 @@ class VoiceConversationOrchestrator(
                 }
 
                 val activeConvId = activeConversationIdProvider()
+                val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(context).getCurrentUserId()
                 val memoryPack = runCatching {
                     com.lichiai.memory.manager.MemoryContextGateway.retrieve(
                         context = context,
                         query = userQuery,
-                        conversationId = activeConvId
+                        conversationId = activeConvId,
+                        userId = currentUserId
                     )
                 }.getOrNull()
                 val memoryContextPrompt = memoryPack?.formattedPromptContext ?: ""
@@ -798,6 +804,25 @@ class VoiceConversationOrchestrator(
                         )
                     }
                 store.upsert(updated)
+                val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(context).getCurrentUserId()
+                com.lichiai.memory.manager.MemoryContextGateway.recordTurn(
+                    context = context,
+                    conversationId = currentConvId,
+                    messageId = userMsg.id,
+                    role = "user",
+                    content = userTrimmed,
+                    timestamp = now,
+                    userId = currentUserId
+                )
+                com.lichiai.memory.manager.MemoryContextGateway.recordTurn(
+                    context = context,
+                    conversationId = currentConvId,
+                    messageId = assistantMsg.id,
+                    role = "assistant",
+                    content = assistantTrimmed,
+                    timestamp = now + 1,
+                    userId = currentUserId
+                )
             } catch (e: Exception) {
                 android.util.Log.e("VoiceOrchestrator", "Failed to save voice turn to conversation", e)
             }

@@ -66,11 +66,57 @@ enum class TargetType {
 }
 
 @Serializable
+data class SpyPlatformRef(
+    val key: String,
+    val displayName: String,
+    val canonicalDomain: String? = null
+)
+
+@Serializable
+enum class SpyLookupMode {
+    SINGLE,
+    FULL
+}
+
+@Serializable
+enum class SpyCapability(val id: String, val label: String) {
+    PROFILE("profile", "Profile Overview"),
+    PROFILE_IMAGE("profile_image", "Avatar & Image"),
+    DISPLAY_NAME("display_name", "Display Name"),
+    BIO("bio", "Biography / Description"),
+    LOCATION("location", "Location"),
+    WEBSITE("website", "Website & Links"),
+    FOLLOWER_COUNT("follower_count", "Follower Count"),
+    FOLLOWING_COUNT("following_count", "Following Count"),
+    FOLLOWERS_LIST("followers_list", "Followers List"),
+    FOLLOWING_LIST("following_list", "Following List"),
+    POST_COUNT("post_count", "Post Count"),
+    POSTS("posts", "Posts / Content"),
+    VIDEOS("videos", "Videos / Reels / Shorts"),
+    PUBLIC_MEDIA("public_media", "Public Media"),
+    PUBLIC_METADATA("public_metadata", "Public Metadata"),
+    PUBLIC_LINKS("public_links", "Public Links"),
+    PUBLIC_EMAIL("public_email", "Public Business Email"),
+    PUBLIC_PHONE("public_phone", "Public Business Phone"),
+    SUBSCRIBER_COUNT("subscriber_count", "Subscriber Count"),
+    VIEW_COUNT("view_count", "View Count / Metrics"),
+    CONTENT_SEARCH("content_search", "Content Search"),
+    CHANNEL_DATA("channel_data", "Channel Analytics"),
+    COMMUNITY_DATA("community_data", "Community / Subreddit"),
+    BUSINESS_DATA("business_data", "Business Registry"),
+    PUBLIC_BUSINESS_PHONE("business_phone", "Public Business Phone"),
+    PUBLIC_BUSINESS_EMAIL("business_email", "Public Business Email"),
+    PUBLIC_CONTACT("public_contact", "Public Contacts")
+}
+
+@Serializable
 data class SpyTask(
     val taskId: String = java.util.UUID.randomUUID().toString(),
     val requestId: String = "",
     val messageId: String = "",
     val platform: PlatformType = PlatformType.GENERIC_WEB,
+    val dynamicPlatformRef: SpyPlatformRef? = null,
+    val lookupMode: SpyLookupMode = SpyLookupMode.SINGLE,
     val operation: SpyOperation = SpyOperation.PROFILE_LOOKUP,
     val target: String = "",
     val targetType: TargetType = TargetType.HANDLE_OR_USERNAME,

@@ -47,6 +47,7 @@ class SettingsRepository(private val context: Context) {
         val SPY_ENABLED = booleanPreferencesKey("spy_enabled")
         val SPY_FREE_FIRST = booleanPreferencesKey("spy_free_first")
         val SPY_MAX_ITEMS = stringPreferencesKey("spy_max_items")
+        val SPY_TIMEOUT = stringPreferencesKey("spy_timeout_seconds")
     }
 
     val settings: Flow<AppSettings> = context.settingsDataStore.data.map { p -> read(p) }
@@ -65,7 +66,8 @@ class SettingsRepository(private val context: Context) {
         apifyApiToken = p[Keys.APIFY_TOKEN] ?: "",
         spyEnabled = p[Keys.SPY_ENABLED] ?: true,
         spyFreeFirstOnly = p[Keys.SPY_FREE_FIRST] ?: true,
-        spyMaxDatasetItems = p[Keys.SPY_MAX_ITEMS]?.toIntOrNull() ?: 10
+        spyMaxDatasetItems = p[Keys.SPY_MAX_ITEMS]?.toIntOrNull() ?: 10,
+        spyTimeoutSeconds = p[Keys.SPY_TIMEOUT]?.toLongOrNull() ?: 120L
     )
 
     suspend fun update(transform: (AppSettings) -> AppSettings) {
@@ -85,6 +87,7 @@ class SettingsRepository(private val context: Context) {
             p[Keys.SPY_ENABLED] = next.spyEnabled
             p[Keys.SPY_FREE_FIRST] = next.spyFreeFirstOnly
             p[Keys.SPY_MAX_ITEMS] = next.spyMaxDatasetItems.toString()
+            p[Keys.SPY_TIMEOUT] = next.spyTimeoutSeconds.toString()
         }
     }
 }

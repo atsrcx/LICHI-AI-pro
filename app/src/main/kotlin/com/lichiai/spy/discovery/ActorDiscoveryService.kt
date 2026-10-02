@@ -7,14 +7,16 @@ import com.lichiai.spy.apify.ApifyStoreItem
 import com.lichiai.spy.core.PlatformType
 import com.lichiai.spy.core.SpyError
 import com.lichiai.spy.core.SpyOperation
+import java.util.Locale
 
 /**
  * Service responsible for discovering, evaluating, and selecting suitable Apify Actors.
  *
  * Implements:
  * 1. Curated high-reputation fallback registry for common platforms (Instagram, YouTube, Reddit, TikTok, Twitter/X, GitHub)
- * 2. Dynamic Apify Store search via ApifyClient
- * 3. Free-First ranking policy (prioritizes free and pay-per-event/result over monthly subscriptions)
+ * 2. Operation-compatibility evaluation (matching PROFILE_LOOKUP vs POST_SEARCH vs CHANNEL_DATA)
+ * 3. Dynamic Apify Store search and validation
+ * 4. Free-First ranking policy (prioritizes free and pay-per-event/result over monthly subscriptions)
  */
 class ActorDiscoveryService(
     private val apifyClient: ApifyClient
@@ -46,20 +48,20 @@ class ActorDiscoveryService(
             ),
             PlatformType.YOUTUBE to listOf(
                 ActorMetadata(
-                    actorId = "streamers~youtube-scraper",
-                    name = "youtube-scraper",
-                    username = "streamers",
-                    title = "YouTube Scraper",
-                    description = "Scrape YouTube channels, video details, view counts, subscriber counts, and comments.",
-                    isFree = true,
-                    pricingModel = "FREE"
-                ),
-                ActorMetadata(
                     actorId = "streamers~youtube-channel-scraper",
                     name = "youtube-channel-scraper",
                     username = "streamers",
                     title = "YouTube Channel Scraper",
                     description = "Extract channel metadata, statistics, playlists, and latest videos.",
+                    isFree = true,
+                    pricingModel = "FREE"
+                ),
+                ActorMetadata(
+                    actorId = "streamers~youtube-scraper",
+                    name = "youtube-scraper",
+                    username = "streamers",
+                    title = "YouTube Scraper",
+                    description = "Scrape YouTube channels, video details, view counts, subscriber counts, and comments.",
                     isFree = true,
                     pricingModel = "FREE"
                 )
@@ -113,6 +115,7 @@ class ActorDiscoveryService(
 
     /**
      * Finds the best Actor candidate for the given platform and operation.
+     * Evaluates semantic operation compatibility rather than just popularity metrics.
      */
     suspend fun discoverBestActor(
         platform: PlatformType,
@@ -120,17 +123,16 @@ class ActorDiscoveryService(
         targetQuery: String,
         freeFirstOnly: Boolean = true
     ): Result<ActorMetadata> {
+        if (platform == PlatformType.UNKNOWN) {
+            return Result.failure(SpyError.NoCompatibleActor("Unknown platform", operation.name))
+        }
+
         // 1. Check curated list first for instantaneous & reliable matching
         val curatedCandidates = CURATED_ACTORS[platform] ?: emptyList()
-        val matchingCurated = when (operation) {
-            SpyOperation.PROFILE_LOOKUP -> curatedCandidates.firstOrNull { it.name.contains("profile") }
-            SpyOperation.CHANNEL_DATA -> curatedCandidates.firstOrNull { it.name.contains("channel") || it.name.contains("youtube") }
-            SpyOperation.POST_SEARCH, SpyOperation.COMMUNITY_POSTS -> curatedCandidates.firstOrNull { !it.name.contains("profile") }
-            else -> curatedCandidates.firstOrNull()
-        } ?: curatedCandidates.firstOrNull()
+        val matchingCurated = selectCuratedActor(curatedCandidates, operation)
 
         // 2. Query dynamic Apify Store
-        val searchQuery = "${platform.displayName} ${operation.description.take(20)} $targetQuery".trim()
+        val searchQuery = "${platform.displayName} ${getOperationSearchKeyword(operation)} $targetQuery".trim()
         val storeResult = apifyClient.searchStore(query = searchQuery, limit = 8)
 
         if (storeResult.isSuccess) {
@@ -139,12 +141,18 @@ class ActorDiscoveryService(
                 storeItems.filter { isItemFree(it) }
             } else storeItems
 
-            val sorted = (if (filtered.isNotEmpty()) filtered else storeItems).sortedByDescending {
-                (it.stats?.totalRuns ?: 0L) + (it.stats?.bookmarkCount ?: 0L) * 10L
-            }
+            val candidates = if (filtered.isNotEmpty()) filtered else storeItems
 
-            val topStoreItem = sorted.firstOrNull()
-            if (topStoreItem != null) {
+            // Rank with operation compatibility weight
+            val scored = candidates.map { item ->
+                val compatibilityScore = calculateOperationCompatibility(item, operation)
+                val popularityScore = ((item.stats?.totalRuns ?: 0L).coerceAtMost(100_000) / 1000.0) + (item.stats?.bookmarkCount ?: 0L)
+                val totalScore = compatibilityScore * 100 + popularityScore
+                item to totalScore
+            }.sortedByDescending { it.second }
+
+            val topStoreItem = scored.firstOrNull()?.first
+            if (topStoreItem != null && calculateOperationCompatibility(topStoreItem, operation) > 0) {
                 val fullActorId = if (topStoreItem.username.isNotBlank()) {
                     ActorIdentifierResolver.toCanonicalApiId("${topStoreItem.username}~${topStoreItem.name}")
                 } else {
@@ -166,12 +174,73 @@ class ActorDiscoveryService(
             }
         }
 
-        // Fallback to curated Actor if store search had no valid items or network issue
+        // 3. Fallback to curated Actor if store search had no compatible items
         if (matchingCurated != null) {
             return Result.success(matchingCurated)
         }
 
         return Result.failure(SpyError.NoCompatibleActor(platform.displayName, operation.name))
+    }
+
+    private fun selectCuratedActor(candidates: List<ActorMetadata>, operation: SpyOperation): ActorMetadata? {
+        if (candidates.isEmpty()) return null
+        return when (operation) {
+            SpyOperation.PROFILE_LOOKUP, SpyOperation.PROFILE_PREVIEW, SpyOperation.PROFILE_FOLLOWERS_SUMMARY, SpyOperation.PROFILE_PUBLIC_CONTACTS -> {
+                candidates.firstOrNull { it.name.contains("profile") || it.name.contains("user") } ?: candidates.first()
+            }
+            SpyOperation.CHANNEL_DATA -> {
+                candidates.firstOrNull { it.name.contains("channel") } ?: candidates.firstOrNull { it.name.contains("youtube") } ?: candidates.first()
+            }
+            SpyOperation.POST_SEARCH, SpyOperation.COMMUNITY_POSTS, SpyOperation.CONTENT_SEARCH -> {
+                candidates.firstOrNull { !it.name.contains("profile") } ?: candidates.first()
+            }
+            SpyOperation.PROFILE_MEDIA, SpyOperation.PROFILE_VIDEOS, SpyOperation.PROFILE_POSTS -> {
+                candidates.firstOrNull { it.name.contains("scraper") } ?: candidates.first()
+            }
+            else -> candidates.first()
+        }
+    }
+
+    private fun getOperationSearchKeyword(operation: SpyOperation): String {
+        return when (operation) {
+            SpyOperation.PROFILE_LOOKUP, SpyOperation.PROFILE_PREVIEW -> "profile"
+            SpyOperation.CHANNEL_DATA -> "channel"
+            SpyOperation.POST_SEARCH -> "posts"
+            SpyOperation.COMMUNITY_POSTS -> "subreddit"
+            SpyOperation.PROFILE_MEDIA, SpyOperation.PROFILE_VIDEOS -> "media"
+            else -> "scraper"
+        }
+    }
+
+    private fun calculateOperationCompatibility(item: ApifyStoreItem, operation: SpyOperation): Int {
+        val name = item.name.lowercase(Locale.ROOT)
+        val title = item.title.lowercase(Locale.ROOT)
+        val desc = item.description.lowercase(Locale.ROOT)
+        val text = "$name $title $desc"
+
+        return when (operation) {
+            SpyOperation.PROFILE_LOOKUP, SpyOperation.PROFILE_PREVIEW, SpyOperation.PROFILE_FOLLOWERS_SUMMARY, SpyOperation.PROFILE_PUBLIC_CONTACTS -> {
+                var s = 0
+                if (name.contains("profile") || name.contains("user")) s += 50
+                if (title.contains("profile") || title.contains("user")) s += 30
+                if (desc.contains("profile") || desc.contains("follower") || desc.contains("bio")) s += 20
+                s
+            }
+            SpyOperation.CHANNEL_DATA -> {
+                var s = 0
+                if (name.contains("channel")) s += 50
+                if (title.contains("channel")) s += 30
+                if (desc.contains("channel") || desc.contains("subscriber")) s += 20
+                s
+            }
+            SpyOperation.POST_SEARCH, SpyOperation.COMMUNITY_POSTS -> {
+                var s = 0
+                if (name.contains("post") || name.contains("reddit") || name.contains("tweet")) s += 50
+                if (title.contains("post") || title.contains("search")) s += 30
+                s
+            }
+            else -> 10
+        }
     }
 
     private fun isItemFree(item: ApifyStoreItem): Boolean {

@@ -31,7 +31,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.ArrowUpward
 import androidx.compose.material.icons.filled.AttachFile
@@ -84,6 +83,7 @@ fun InputBar(
     val focus = LocalFocusManager.current
     val ctx = LocalContext.current
     var attachMenuOpen by remember { mutableStateOf(false) }
+    val isDark = MaterialTheme.colorScheme.background.red < 0.2f
 
     val pickImage = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -177,10 +177,11 @@ fun InputBar(
         // Pill Capsule Message Composer
         Surface(
             shape = RoundedCornerShape(32.dp),
-            color = LichiVisualTokens.SurfaceWhite,
+            color = MaterialTheme.colorScheme.surface,
             shadowElevation = 3.dp,
             modifier = Modifier
                 .fillMaxWidth()
+                .border(0.8.dp, LichiVisualTokens.SurfaceBorder, RoundedCornerShape(32.dp))
                 .shadow(
                     elevation = 6.dp,
                     shape = RoundedCornerShape(32.dp),
@@ -210,7 +211,7 @@ fun InputBar(
                         Icon(
                             imageVector = Icons.Default.Add,
                             contentDescription = "Attach media or files",
-                            tint = LichiVisualTokens.TextNavyMuted,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(22.dp)
                         )
                     }
@@ -251,7 +252,7 @@ fun InputBar(
                     if (value.isEmpty()) {
                         Text(
                             text = placeholder,
-                            color = LichiVisualTokens.TextGraySubtle,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.65f),
                             style = MaterialTheme.typography.bodyLarge.copy(
                                 fontSize = 15.sp,
                                 fontWeight = FontWeight.Normal
@@ -263,7 +264,7 @@ fun InputBar(
                         onValueChange = onValueChange,
                         modifier = Modifier.fillMaxWidth(),
                         textStyle = MaterialTheme.typography.bodyLarge.copy(
-                            color = LichiVisualTokens.TextNavy,
+                            color = MaterialTheme.colorScheme.onSurface,
                             fontSize = 15.sp,
                             lineHeight = 21.sp
                         ),
@@ -276,12 +277,16 @@ fun InputBar(
 
                 Spacer(Modifier.width(6.dp))
 
-                // Right Send / Stop Dark Navy Circular Button
+                // Right Send / Stop Button
                 val canSend = (value.trim().isNotEmpty() || attachments.isNotEmpty()) && !isStreaming && enabled
                 val buttonBg = when {
                     isStreaming -> LichiVisualTokens.BrandPurple
-                    canSend -> LichiVisualTokens.TextNavy
-                    else -> LichiVisualTokens.TextNavy
+                    canSend -> if (isDark) LichiVisualTokens.BrandPurple else Color(0xFF1E1B4B)
+                    else -> if (isDark) Color(0xFF282A3A) else Color(0xFFE2E8F0)
+                }
+                val iconTint = when {
+                    isStreaming || canSend -> Color.White
+                    else -> if (isDark) Color(0xFF6B7280) else Color(0xFF94A3B8)
                 }
 
                 Box(
@@ -306,7 +311,7 @@ fun InputBar(
                     Icon(
                         imageVector = if (isStreaming) Icons.Default.Stop else Icons.Default.ArrowUpward,
                         contentDescription = if (isStreaming) "Stop generating" else "Send message",
-                        tint = Color.White,
+                        tint = iconTint,
                         modifier = Modifier.size(19.dp)
                     )
                 }
@@ -321,7 +326,7 @@ private fun AttachmentChip(att: Attachment, onRemove: () -> Unit) {
         modifier = Modifier
             .clip(RoundedCornerShape(12.dp))
             .background(LichiVisualTokens.BrandPurpleSoftBg)
-            .border(0.8.dp, LichiVisualTokens.BrandPurple.copy(alpha = 0.2f), RoundedCornerShape(12.dp))
+            .border(0.8.dp, LichiVisualTokens.BrandPurple.copy(alpha = 0.3f), RoundedCornerShape(12.dp))
             .padding(start = 10.dp, end = 6.dp, top = 6.dp, bottom = 6.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
@@ -335,7 +340,7 @@ private fun AttachmentChip(att: Attachment, onRemove: () -> Unit) {
         Column {
             Text(
                 text = att.name,
-                color = LichiVisualTokens.TextNavy,
+                color = MaterialTheme.colorScheme.onSurface,
                 style = MaterialTheme.typography.bodyMedium.copy(
                     fontSize = 12.sp,
                     fontFamily = FontFamily.Monospace,
@@ -345,7 +350,7 @@ private fun AttachmentChip(att: Attachment, onRemove: () -> Unit) {
             )
             Text(
                 text = AttachmentLoader.formatBytes(att.sizeBytes),
-                color = LichiVisualTokens.TextGray,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp)
             )
         }
@@ -361,7 +366,7 @@ private fun AttachmentChip(att: Attachment, onRemove: () -> Unit) {
                 imageVector = Icons.Default.Close,
                 contentDescription = "Remove attachment",
                 modifier = Modifier.size(12.dp),
-                tint = LichiVisualTokens.TextGray
+                tint = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }

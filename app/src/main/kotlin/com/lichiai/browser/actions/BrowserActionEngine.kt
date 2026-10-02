@@ -31,21 +31,19 @@ class BrowserActionEngine(
         val url = activeEngine?.getUrl() ?: "about:blank"
         val title = activeEngine?.getTitle() ?: ""
 
-        // Phase 3 & 5: Strict Generation ID Validation
-        if (action.generationId != null) {
-            val activeSnap = perceptionLayer.getActiveSnapshot()
-            if (activeSnap == null || activeSnap.isStale || action.generationId != activeSnap.generationId) {
-                return@withContext BrowserActionResult(
-                    status = ActionExecutionStatus.STALE_TARGET_GENERATION,
-                    actionName = action::class.simpleName ?: "BrowserAction",
-                    isSuccess = false,
-                    message = "STALE_TARGET_GENERATION: Target generation '${action.generationId}' does not match active snapshot generation '${activeSnap?.generationId}'.",
-                    currentUrl = url,
-                    currentTitle = title,
-                    generationId = action.generationId,
-                    error = "STALE_TARGET_GENERATION"
-                )
-            }
+        // Phase 4: Strict Action Engine Generation Gate (Mandatory)
+        val activeSnap = perceptionLayer.getActiveSnapshot()
+        if (activeSnap == null || activeSnap.isStale || action.generationId != activeSnap.generationId) {
+            return@withContext BrowserActionResult(
+                status = ActionExecutionStatus.STALE_TARGET_GENERATION,
+                actionName = action::class.simpleName ?: "BrowserAction",
+                isSuccess = false,
+                message = "STALE_TARGET_GENERATION: Target generation '${action.generationId}' does not match active snapshot generation '${activeSnap?.generationId}' (stale=${activeSnap?.isStale}).",
+                currentUrl = url,
+                currentTitle = title,
+                generationId = action.generationId,
+                error = "STALE_TARGET_GENERATION"
+            )
         }
 
         when (action) {
@@ -158,8 +156,9 @@ class BrowserActionEngine(
                 val idx = target?.originalIndex ?: action.targetIdOrIndex.toIntOrNull()
                 val selector = if (target == null && idx == null) action.targetIdOrIndex else null
 
-                // Phase 8: Protected Sensitive Field Interception (Passwords, OTPs, CVVs)
-                val isSensitive = target?.type == "password" ||
+                // Phase 6 & 25: Protected Sensitive Field Interception (Passwords, OTPs, CVVs)
+                val isSensitive = target?.sensitive == true ||
+                        target?.type == "password" ||
                         target?.labelOrText?.contains("password", ignoreCase = true) == true ||
                         target?.labelOrText?.contains("otp", ignoreCase = true) == true ||
                         target?.placeholder?.contains("password", ignoreCase = true) == true ||
@@ -193,17 +192,39 @@ class BrowserActionEngine(
 
                 if (action.submit) {
                     perceptionLayer.invalidatePerception()
-                }
+                    BrowserActionResult(
+                        status = if (typed) ActionExecutionStatus.SUCCESS else ActionExecutionStatus.FAILED,
+                        actionName = "TypeText",
+                        isSuccess = typed,
+                        message = if (typed) "Submitted text into ${target?.semanticId ?: "field"}" else "Failed to type and submit text",
+                        currentUrl = url,
+                        currentTitle = title,
+                        generationId = action.generationId
+                    )
+                } else {
+                    // Phase 6: Verify actual field state from post-action DOM
+                    com.lichiai.browser.runtime.BrowserConditionWaiter.waitForDomStable(settleMs = 150L, timeoutMs = 1500L) { activeEngine }
+                    val postSnap = perceptionLayer.observePage(activeEngine)
+                    val freshTarget = postSnap.semanticElements.firstOrNull {
+                        it.semanticId == (target?.semanticId ?: "") || it.originalIndex == idx
+                    }
+                    val verifyResult = com.lichiai.browser.verifier.BrowserVerifier.verifyTypeText(
+                        expectedText = action.text,
+                        actualValue = freshTarget?.value?.ifBlank { freshTarget.inputValue },
+                        isSensitive = false,
+                        elementFound = freshTarget != null
+                    )
 
-                BrowserActionResult(
-                    status = if (typed) ActionExecutionStatus.SUCCESS else ActionExecutionStatus.FAILED,
-                    actionName = "TypeText",
-                    isSuccess = typed,
-                    message = if (typed) "Typed text into ${target?.semanticId ?: "field"}" else "Failed to type text",
-                    currentUrl = url,
-                    currentTitle = title,
-                    generationId = action.generationId
-                )
+                    BrowserActionResult(
+                        status = if (verifyResult.passed) ActionExecutionStatus.SUCCESS else ActionExecutionStatus.FAILED,
+                        actionName = "TypeText",
+                        isSuccess = verifyResult.passed,
+                        message = verifyResult.detail,
+                        currentUrl = postSnap.url,
+                        currentTitle = postSnap.title,
+                        generationId = action.generationId
+                    )
+                }
             }
             is TypedBrowserAction.ClearText -> {
                 val target = perceptionLayer.resolveElement(action.targetIdOrIndex)
@@ -233,14 +254,28 @@ class BrowserActionEngine(
                 )
             }
             is TypedBrowserAction.Scroll -> {
+                // Phase 8: Real Scroll Verification
+                val preScrollY = activeSnap.loadingState.scrollY
+                val preMaxY = activeSnap.loadingState.maxScrollY
                 val ok = browserController.scroll(action.direction, action.amount)
+
+                com.lichiai.browser.runtime.BrowserConditionWaiter.waitForDomStable(settleMs = 150L, timeoutMs = 1500L) { activeEngine }
+                val postSnap = perceptionLayer.observePage(activeEngine)
+                val verifyResult = com.lichiai.browser.verifier.BrowserVerifier.verifyScroll(
+                    direction = action.direction,
+                    preScrollY = preScrollY,
+                    preMaxScrollY = preMaxY,
+                    postScrollY = postSnap.loadingState.scrollY,
+                    postMaxScrollY = postSnap.loadingState.maxScrollY
+                )
+
                 BrowserActionResult(
-                    status = ActionExecutionStatus.SUCCESS,
+                    status = if (verifyResult.passed) ActionExecutionStatus.SUCCESS else ActionExecutionStatus.FAILED,
                     actionName = "Scroll",
-                    isSuccess = ok,
-                    message = "Scrolled ${action.direction.name.lowercase()}",
-                    currentUrl = url,
-                    currentTitle = title,
+                    isSuccess = verifyResult.passed,
+                    message = verifyResult.detail,
+                    currentUrl = postSnap.url,
+                    currentTitle = postSnap.title,
                     generationId = action.generationId
                 )
             }
@@ -275,13 +310,16 @@ class BrowserActionEngine(
                 val target = action.targetIdOrIndex?.let { perceptionLayer.resolveElement(it) }
                 val ok = browserController.typeText(index = target?.originalIndex, selector = null, text = "", submit = true)
                 perceptionLayer.invalidatePerception()
+                com.lichiai.browser.runtime.BrowserConditionWaiter.waitForDomStable(settleMs = 150L, timeoutMs = 2000L) { activeEngine }
+                val postSnap = perceptionLayer.observePage(activeEngine)
+                val submitted = ok && (postSnap.url != url || postSnap.title != title || postSnap.generationId != activeSnap.generationId)
                 BrowserActionResult(
-                    status = ActionExecutionStatus.SUCCESS,
+                    status = if (submitted) ActionExecutionStatus.SUCCESS else ActionExecutionStatus.FAILED,
                     actionName = "SubmitForm",
-                    isSuccess = ok,
-                    message = "Submitted form",
-                    currentUrl = url,
-                    currentTitle = title,
+                    isSuccess = submitted,
+                    message = if (submitted) "Submitted form successfully" else "Form submission did not produce observable state change",
+                    currentUrl = postSnap.url,
+                    currentTitle = postSnap.title,
                     generationId = action.generationId
                 )
             }
@@ -325,11 +363,13 @@ class BrowserActionEngine(
                 )
             }
             is TypedBrowserAction.FindOnPage -> {
+                val found = activeSnap.visibleTextSnippet.contains(action.keyword, ignoreCase = true) ||
+                        activeSnap.semanticElements.any { it.labelOrText.contains(action.keyword, ignoreCase = true) }
                 BrowserActionResult(
-                    status = ActionExecutionStatus.SUCCESS,
+                    status = if (found) ActionExecutionStatus.SUCCESS else ActionExecutionStatus.FAILED,
                     actionName = "FindOnPage",
-                    isSuccess = true,
-                    message = "Found '${action.keyword}' on page",
+                    isSuccess = found,
+                    message = if (found) "Found '${action.keyword}' on page" else "'${action.keyword}' not found on page",
                     currentUrl = url,
                     currentTitle = title,
                     generationId = action.generationId
@@ -375,17 +415,11 @@ class BrowserActionEngine(
                 )
             }
             is TypedBrowserAction.WaitForElement -> {
-                var found = false
-                val start = System.currentTimeMillis()
-                while (System.currentTimeMillis() - start < action.timeoutMs) {
-                    val target = perceptionLayer.resolveElement(action.selectorOrText)
-                    if (target != null) {
-                        found = true
-                        break
-                    }
-                    delay(300)
-                    perceptionLayer.observePage(activeEngine)
-                }
+                val found = com.lichiai.browser.runtime.BrowserConditionWaiter.waitForElementVisible(
+                    targetQuery = action.selectorOrText,
+                    timeoutMs = action.timeoutMs
+                ) { perceptionLayer.observePage(activeEngine) }
+
                 BrowserActionResult(
                     status = if (found) ActionExecutionStatus.SUCCESS else ActionExecutionStatus.TIMEOUT,
                     actionName = "WaitForElement",
@@ -397,11 +431,15 @@ class BrowserActionEngine(
                 )
             }
             is TypedBrowserAction.Download -> {
+                val ok = if (action.url.startsWith("http://") || action.url.startsWith("https://")) {
+                    browserController.downloadManager.startDownload(action.url, "LichiBrowser", "", "", 0L)
+                    true
+                } else false
                 BrowserActionResult(
-                    status = ActionExecutionStatus.SUCCESS,
+                    status = if (ok) ActionExecutionStatus.SUCCESS else ActionExecutionStatus.FAILED,
                     actionName = "Download",
-                    isSuccess = true,
-                    message = "Initiated download for ${action.url}",
+                    isSuccess = ok,
+                    message = if (ok) "Initiated download for ${action.url}" else "Failed to start download for ${action.url}",
                     currentUrl = url,
                     currentTitle = title,
                     generationId = action.generationId

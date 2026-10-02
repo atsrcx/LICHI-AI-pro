@@ -124,7 +124,24 @@ class UniversalTaskOrchestratorV2(
         val convId = conversationId.ifBlank { context?.conversationId ?: "default_session" }
         val activeContext = context ?: contextBuilder.buildContext(convId)
 
-        // 0. DETERMINISTIC #SPY PLATFORM INTELLIGENCE GATE & UNIVERSAL CONTEXT CONTINUATION
+        // 0. AMNESIA & FORGET SUBSYSTEM ROUTE
+        val memoryEngine = com.lichiai.memory.manager.LichiMemoryEngine.getInstance(this@UniversalTaskOrchestratorV2.context)
+        val forgetTarget = memoryEngine.tombstoneManager.parseForgetIntent(trimmed)
+        if (forgetTarget != null) {
+            val resolvedUserId = com.lichiai.memory.identity.UserIdentityManager.getStableUserId(this@UniversalTaskOrchestratorV2.context)
+            memoryEngine.tombstoneMemoryByDescription(
+                description = forgetTarget,
+                conversationId = convId,
+                userId = resolvedUserId
+            )
+            return@withContext OrchestrationResult(
+                finalSpeech = "I have forgotten that information and deleted it from your persistent memory.",
+                isSuccess = true,
+                primaryCapability = LichiCapability.CHAT
+            )
+        }
+
+        // 0.1 DETERMINISTIC #SPY PLATFORM INTELLIGENCE GATE & UNIVERSAL CONTEXT CONTINUATION
         val spyTrigger = com.lichiai.spy.core.SpyGate.checkTrigger(trimmed)
         if (spyTrigger is com.lichiai.spy.core.SpyGateResult.Triggered) {
             val appContext = this@UniversalTaskOrchestratorV2.context

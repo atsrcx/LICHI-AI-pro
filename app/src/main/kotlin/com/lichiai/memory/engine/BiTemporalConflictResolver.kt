@@ -30,6 +30,8 @@ class BiTemporalConflictResolver(
         private const val TAG = "BiTemporalConflict"
     }
 
+    var onItemSavedListener: (suspend (MemoryItemEntity) -> Unit)? = null
+
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
     /**
@@ -49,14 +51,25 @@ class BiTemporalConflictResolver(
         userId: String = "user_primary_default",
         scope: String = "USER",
         trustLevel: String = "USER_EXPLICIT",
-        associativeKeys: List<String> = emptyList()
+        associativeKeys: List<String> = emptyList(),
+        dedupeKey: String = ""
     ): MemoryItemEntity {
-        // Find existing active items with same key
-        val existingActive = memoryItemDao.getActiveByKey(key)
+        val effectiveDedupeKey = dedupeKey.ifBlank {
+            com.lichiai.memory.dedupe.MemoryDeduplicator.generateDedupeKey(
+                userId = userId,
+                category = category,
+                subject = "user",
+                predicate = key
+            )
+        }
+
+        // Strict slot matching: only existing active items matching exact dedupeKey or exact key
+        val existingByDedupe = memoryItemDao.getActiveByDedupeKeyForUser(effectiveDedupeKey, userId)
+        val existingActive = if (existingByDedupe.isNotEmpty()) existingByDedupe else memoryItemDao.getActiveByKeyForUser(key, userId)
 
         for (oldItem in existingActive) {
             if (oldItem.value.trim().equals(value.trim(), ignoreCase = true)) {
-                // Same value, refresh observation time and salience if higher
+                // Same value for the exact same slot: refresh observation time and salience (no-op duplicate)
                 val mergedKeys = runCatching {
                     json.decodeFromString<List<String>>(oldItem.associativeKeysJson)
                 }.getOrDefault(emptyList()).toMutableList().apply {
@@ -68,13 +81,15 @@ class BiTemporalConflictResolver(
                     salience = maxOf(oldItem.salience, salience),
                     confidence = maxOf(oldItem.confidence, confidence),
                     userId = if (oldItem.userId.isNotBlank()) oldItem.userId else userId,
-                    associativeKeysJson = json.encodeToString(mergedKeys)
+                    associativeKeysJson = json.encodeToString(mergedKeys),
+                    dedupeKey = effectiveDedupeKey
                 )
                 memoryItemDao.upsert(refreshed)
+                runCatching { onItemSavedListener?.invoke(refreshed) }
                 return refreshed
             } else {
-                // Different value for same key -> supersede previous fact
-                Log.d(TAG, "Superseding old fact for key '$key': '${oldItem.value}' -> '$value'")
+                // Different value for the exact same slot -> supersede previous fact
+                Log.d(TAG, "Superseding old fact for slot '$effectiveDedupeKey' (key='$key'): '${oldItem.value}' -> '$value'")
                 val superseded = oldItem.copy(
                     status = MemoryStatus.SUPERSEDED.name,
                     validUntil = validFrom ?: observedAt
@@ -100,10 +115,12 @@ class BiTemporalConflictResolver(
             userId = userId,
             scope = scope,
             trustLevel = trustLevel,
-            associativeKeysJson = associativeJson
+            associativeKeysJson = associativeJson,
+            dedupeKey = effectiveDedupeKey
         )
 
         memoryItemDao.upsert(newItem)
+        runCatching { onItemSavedListener?.invoke(newItem) }
         return newItem
     }
 
@@ -122,7 +139,7 @@ class BiTemporalConflictResolver(
         userId: String = "user_primary_default",
         scope: String = "USER"
     ): EntityRecordEntity {
-        val existing = entityRecordDao.findByCanonicalName(canonicalName)
+        val existing = entityRecordDao.findByCanonicalNameForUser(canonicalName, userId)
 
         if (existing != null) {
             val existingAliases = runCatching {
@@ -180,9 +197,10 @@ class BiTemporalConflictResolver(
         relationType: String,
         attributes: Map<String, String> = emptyMap(),
         confidence: Float = 1.0f,
-        observedAt: Long = System.currentTimeMillis()
+        observedAt: Long = System.currentTimeMillis(),
+        userId: String = "user_primary_default"
     ): EntityRelationEntity {
-        val existingRelations = entityRelationDao.getRelationsForEntity(sourceEntityId)
+        val existingRelations = entityRelationDao.getRelationsForEntity(sourceEntityId, userId)
         val matching = existingRelations.firstOrNull {
             it.targetEntityId == targetEntityId && it.relationType == relationType
         }
@@ -191,7 +209,8 @@ class BiTemporalConflictResolver(
             val updated = matching.copy(
                 observedAt = observedAt,
                 confidence = maxOf(matching.confidence, confidence),
-                status = MemoryStatus.ACTIVE.name
+                status = MemoryStatus.ACTIVE.name,
+                userId = if (matching.userId.isNotBlank()) matching.userId else userId
             )
             entityRelationDao.upsert(updated)
             return updated
@@ -205,7 +224,8 @@ class BiTemporalConflictResolver(
                 attributesJson = json.encodeToString(attributes),
                 observedAt = observedAt,
                 validFrom = observedAt,
-                status = MemoryStatus.ACTIVE.name
+                status = MemoryStatus.ACTIVE.name,
+                userId = userId
             )
             entityRelationDao.upsert(newRelation)
             return newRelation

@@ -37,6 +37,15 @@ data class ApifyUserPlan(
 )
 
 @Serializable
+data class ApifyStorePage(
+    val total: Int = 0,
+    val count: Int = 0,
+    val offset: Int = 0,
+    val limit: Int = 0,
+    val items: List<ApifyStoreItem> = emptyList()
+)
+
+@Serializable
 data class ApifyStoreResponse(
     val data: ApifyStoreData? = null
 )
@@ -60,8 +69,27 @@ data class ApifyStoreItem(
     val pricingModel: String? = null,
     val stats: ApifyActorStats? = null,
     val isPublic: Boolean = true,
+    val isUnrunnable: Boolean? = null,
     val currentPricing: ApifyCurrentPricing? = null,
-    val pictureUrl: String? = null
+    val pictureUrl: String? = null,
+    val categories: List<String> = emptyList()
+)
+
+@Serializable
+data class ApifyActorBuildResponse(
+    val data: ApifyActorBuildData? = null
+)
+
+@Serializable
+data class ApifyActorBuildData(
+    val id: String = "",
+    val actId: String = "",
+    val buildNumber: String? = null,
+    val status: String? = null,
+    val actorDefinition: JsonObject? = null,
+    val inputSchema: JsonElement? = null,
+    val readme: String? = null,
+    val output: JsonElement? = null
 )
 
 @Serializable

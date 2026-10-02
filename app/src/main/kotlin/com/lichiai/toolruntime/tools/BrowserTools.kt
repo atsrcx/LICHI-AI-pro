@@ -114,7 +114,7 @@ class BrowserTaskTool(
             extractedTables = emptyList()
         )
         val goalCheck = browserController.agent.runtime.verifyGoal(intent, tempSnapshot)
-        val isVerified = result.isSuccess && (goalCheck.status == com.lichiai.browser.runtime.GoalVerificationStatus.VERIFIED || goalCheck.status == com.lichiai.browser.runtime.GoalVerificationStatus.PARTIALLY_VERIFIED)
+        val isVerified = result.isSuccess && goalCheck.status == com.lichiai.browser.runtime.GoalVerificationStatus.VERIFIED
 
         return VerificationResult(
             isVerified = isVerified,
@@ -127,7 +127,7 @@ class BrowserTaskTool(
 
 /**
  * Real Browser Navigation Tool.
- * Uses real Chromium engine state (URL, title, loading status) instead of arbitrary delays.
+ * Uses condition-based waiters and BrowserVerifier to ensure destination is reached.
  */
 class BrowserOpenTool(
     private val browserController: BrowserController,
@@ -165,23 +165,16 @@ class BrowserOpenTool(
         onNavigateToBrowser()
 
         return try {
+            val initialUrl = browserController.getPageContext().currentUrl
             val navSuccess = browserController.navigate(url)
             if (!navSuccess) {
                 return ToolResult.failure(call.callId, definition.id, "Browser could not initiate navigation to $url.")
             }
 
-            // Real State Observation: Wait up to 3.5s for page state to reflect navigation
-            var attempts = 0
-            var finalCtx = browserController.getPageContext()
-            while (attempts < 7) {
-                delay(500)
-                finalCtx = browserController.getPageContext()
-                val activeTab = browserController.tabManager.activeTab
-                if (activeTab != null && !activeTab.isLoading && finalCtx.currentUrl.isNotBlank()) {
-                    break
-                }
-                attempts++
-            }
+            // Real State Observation: Condition-based page ready check
+            com.lichiai.browser.runtime.BrowserConditionWaiter.waitForUrlChange(initialUrl) { browserController.activeEngine.value }
+            com.lichiai.browser.runtime.BrowserConditionWaiter.waitForPageReady(timeoutMs = 5000L) { browserController.activeEngine.value }
+            val finalCtx = browserController.getPageContext()
 
             val summary = "Navigated to $url. Current page title: '${finalCtx.currentTitle.ifBlank { "Loaded" }}'."
 
@@ -202,13 +195,15 @@ class BrowserOpenTool(
     }
 
     override suspend fun verify(call: ToolCall, result: ToolResult, context: ToolExecutionContext): VerificationResult {
+        val requestedUrl = call.arguments["url"]?.trim() ?: ""
         val currentCtx = browserController.getPageContext()
-        val actual = currentCtx.currentUrl
-        val isVerified = result.isSuccess && (actual.isNotBlank() || currentCtx.currentTitle.isNotBlank())
+        val navVerify = com.lichiai.browser.verifier.BrowserVerifier.verifyNavigation(requestedUrl, currentCtx)
+        val isVerified = result.isSuccess && navVerify.passed
+
         return VerificationResult(
             isVerified = isVerified,
-            verifiedState = "Active URL: $actual, Title: ${currentCtx.currentTitle}",
-            notes = "Inspected Chromium tab manager state",
+            verifiedState = "Active URL: ${currentCtx.currentUrl}, Title: ${currentCtx.currentTitle}",
+            notes = navVerify.detail,
             outcome = if (isVerified) ToolExecutionOutcome.EXECUTION_SUCCEEDED_VERIFIED else ToolExecutionOutcome.VERIFICATION_FAILED
         )
     }

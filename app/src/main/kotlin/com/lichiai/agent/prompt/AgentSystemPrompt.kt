@@ -142,7 +142,8 @@ Common Package Names:
         fileSystem: AgentFileSystem,
         transientReadState: String = "",
         userInfo: String = "Device: Android phone. User language: System default.",
-        skillContext: String = ""
+        skillContext: String = "",
+        memoryContext: String = ""
     ): String {
         val maxActions = 3
         val skillSection = if (skillContext.isNotBlank()) {
@@ -154,6 +155,14 @@ $skillContext
             """.trimIndent()
         } else ""
 
+        val memorySection = if (memoryContext.isNotBlank()) {
+            """
+            
+# [USER PERSISTENT MEMORY & VERIFIED FACTS]
+$memoryContext
+            """.trimIndent()
+        } else ""
+
         return """
 # [INTRO]
 You are LICHI Autonomous Agent V2, an expert phone automation and UI navigation agent.
@@ -161,7 +170,7 @@ You operate on an Android device via an iterative SENSE -> THINK -> ACT -> OBSER
 Your goal is to accomplish the user request accurately and safely on the device.
 
 # [USER INFO]
-{user_info}
+$userInfo$memorySection
 
 # [LANGUAGE SETTINGS]
 Respond in the language of the user request. Output JSON format strictly.

@@ -43,7 +43,7 @@ data class GeminiLiveModelInfo(
 
 data class VoiceSettings(
     val voiceEngine: VoiceEngine = VoiceEngine.REST,
-    val geminiLiveModel: String = "gemini-2.5-flash-native-audio-preview-12-2025",
+    val geminiLiveModel: String = "gemini-2.0-flash-exp",
     val geminiLiveVoice: String = "Puck",
 
     val sttMode: SttMode = SttMode.SYSTEM_DEFAULT,
@@ -106,20 +106,19 @@ class VoiceSettingsRepository(private val context: Context) {
     companion object {
         val SUPPORTED_LIVE_MODELS = listOf(
             GeminiLiveModelInfo(
+                id = "gemini-2.0-flash-exp",
+                displayName = "Gemini 2.0 Flash Live (Recommended)",
+                description = "Ultra-low-latency bidirectional native audio model"
+            ),
+            GeminiLiveModelInfo(
+                id = "gemini-2.0-flash-realtime-exp",
+                displayName = "Gemini 2.0 Flash Realtime",
+                description = "Experimental realtime bidirectional model"
+            ),
+            GeminiLiveModelInfo(
                 id = "gemini-2.5-flash-native-audio-preview-12-2025",
                 displayName = "Gemini 2.5 Flash Native Audio",
-                description = "Ultra-low-latency native audio model (Recommended)"
-            ),
-            GeminiLiveModelInfo(
-                id = "gemini-3.8-live",
-                displayName = "Gemini 3.8 Live",
-                description = "Bidirectional live audio model"
-            ),
-            GeminiLiveModelInfo(
-                id = "gemini-3.8-live-extended-thinking",
-                displayName = "Gemini 3.8 Live Extended Thinking",
-                description = "Live audio with high-depth analytical reasoning",
-                requiresThinkingConfig = true
+                description = "Native audio preview model"
             )
         )
     }
@@ -127,7 +126,7 @@ class VoiceSettingsRepository(private val context: Context) {
     val settings: Flow<VoiceSettings> = context.voiceDataStore.data.map { prefs ->
         VoiceSettings(
             voiceEngine = prefs[Keys.VOICE_ENGINE]?.let { runCatching { VoiceEngine.valueOf(it) }.getOrNull() } ?: VoiceEngine.REST,
-            geminiLiveModel = prefs[Keys.GEMINI_LIVE_MODEL] ?: "gemini-2.5-flash-native-audio-preview-12-2025",
+            geminiLiveModel = prefs[Keys.GEMINI_LIVE_MODEL] ?: "gemini-2.0-flash-exp",
             geminiLiveVoice = prefs[Keys.GEMINI_LIVE_VOICE] ?: "Puck",
 
             sttMode = prefs[Keys.STT_MODE]?.let { runCatching { SttMode.valueOf(it) }.getOrNull() } ?: SttMode.SYSTEM_DEFAULT,

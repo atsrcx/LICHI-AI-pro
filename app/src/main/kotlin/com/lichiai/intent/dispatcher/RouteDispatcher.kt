@@ -90,7 +90,17 @@ class RouteDispatcher(
                 contextBuilder.reset()
                 DispatchExecutionResult.FallbackChat(intent.naturalAcknowledgment)
             }
-            is ResolvedIntent.NormalChat -> DispatchExecutionResult.FallbackChat(intent.prompt)
+            is ResolvedIntent.NormalChat -> {
+                val memEngine = com.lichiai.memory.manager.LichiMemoryEngine.getInstance(context)
+                val forgetTarget = memEngine.tombstoneManager.parseForgetIntent(intent.prompt)
+                if (forgetTarget != null) {
+                    val userId = com.lichiai.memory.identity.UserIdentityManager.getStableUserId(context)
+                    memEngine.tombstoneMemoryByDescription(forgetTarget, userId = userId)
+                    DispatchExecutionResult.FallbackChat("I have forgotten that information and deleted it from your persistent memory.")
+                } else {
+                    DispatchExecutionResult.FallbackChat(intent.prompt)
+                }
+            }
             is ResolvedIntent.ContextualQuestion -> DispatchExecutionResult.FallbackChat(intent.question)
             is ResolvedIntent.ResumeTask -> DispatchExecutionResult.FallbackChat(intent.naturalAcknowledgment)
             is ResolvedIntent.TaskInterruption -> DispatchExecutionResult.FallbackChat(intent.naturalAcknowledgment)

@@ -4,6 +4,18 @@ import com.lichiai.spy.core.PlatformType
 import kotlinx.serialization.Serializable
 
 @Serializable
+data class PlatformAccount(
+    val platformId: String = "",
+    val username: String = "",
+    val displayName: String = "",
+    val profileUrl: String = "",
+    val avatarUrl: String = "",
+    val bio: String = "",
+    val isVerified: Boolean? = null,
+    val sourceProviderIds: List<String> = emptyList()
+)
+
+@Serializable
 data class PlatformMediaItem(
     val id: String = "",
     val thumbnailUrl: String = "",
@@ -12,7 +24,25 @@ data class PlatformMediaItem(
     val type: String = "image", // "image" | "video" | "reel" | "post"
     val likesCount: String = "",
     val commentsCount: String = "",
-    val timestamp: String = ""
+    val timestamp: String = "",
+    val sourceProviderIds: List<String> = emptyList()
+)
+
+@Serializable
+data class FieldEvidence(
+    val providerId: String,
+    val providerName: String = "",
+    val fieldName: String,
+    val value: String,
+    val observedAt: Long = System.currentTimeMillis()
+)
+
+@Serializable
+data class ProfileConflict(
+    val fieldName: String,
+    val chosenValue: String,
+    val evidences: List<FieldEvidence> = emptyList(),
+    val description: String = ""
 )
 
 @Serializable
@@ -21,12 +51,14 @@ data class PublicContactInfo(
     val phone: String = "",
     val type: String = "Public Business Contact",
     val sourcePlatform: String = "",
-    val confidence: String = "Source-Verified"
+    val confidence: String = "Source-Verified",
+    val sourceProviderIds: List<String> = emptyList()
 )
 
 @Serializable
 data class PlatformProfile(
     val platform: PlatformType = PlatformType.GENERIC_WEB,
+    val platformKey: String = "",
     val platformId: String = "",
     val username: String = "",
     val displayName: String = "",
@@ -46,6 +78,8 @@ data class PlatformProfile(
     val subscriberCount: String = "",
     val views: String = "",
     val joinedDate: String = "",
+    val followersList: List<PlatformAccount> = emptyList(),
+    val followingList: List<PlatformAccount> = emptyList(),
     val recentMedia: List<PlatformMediaItem> = emptyList(),
     val recentPosts: List<String> = emptyList(),
     val recentVideos: List<String> = emptyList(),
@@ -56,7 +90,11 @@ data class PlatformProfile(
     val rawJsonSnippet: String = "",
     val sourceConfidence: String = "Verified Public Data",
     val scraperError: String? = null,
-    val previewRequested: Boolean = true
+    val previewRequested: Boolean = true,
+    val sourceProviders: List<String> = emptyList(),
+    val fieldEvidence: Map<String, List<FieldEvidence>> = emptyMap(),
+    val conflicts: List<ProfileConflict> = emptyList(),
+    val reportId: String? = null
 ) {
     /**
      * Checks if this entity contains verified, genuine extracted profile data.
@@ -73,9 +111,10 @@ data class PlatformProfile(
         val hasAvatar = avatarUrl.isNotBlank()
         val hasMedia = recentMedia.isNotEmpty()
         val hasHighlights = highlights.isNotEmpty()
+        val hasAccounts = followersList.isNotEmpty() || followingList.isNotEmpty()
         val hasVerifiedStatus = isVerified != null
         val hasPrivateStatus = isPrivate != null
 
-        return hasStats || hasBio || hasTitle || hasWebsite || hasEmail || hasPhone || hasAvatar || hasMedia || hasHighlights || hasVerifiedStatus || hasPrivateStatus
+        return hasStats || hasBio || hasTitle || hasWebsite || hasEmail || hasPhone || hasAvatar || hasMedia || hasHighlights || hasAccounts || hasVerifiedStatus || hasPrivateStatus
     }
 }

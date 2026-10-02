@@ -113,14 +113,15 @@ class ApifyClient(
     }
 
     /**
-     * Searches public Store for candidate Actors via GET /v2/store.
+     * Searches public Store for candidate Actors via GET /v2/store with full pagination.
      */
-    suspend fun searchStore(
+    suspend fun searchStorePage(
         query: String,
-        limit: Int = 10,
+        limit: Int = 20,
         offset: Int = 0,
-        sortBy: String = "popularity"
-    ): Result<List<ApifyStoreItem>> = withContext(Dispatchers.IO) {
+        sortBy: String = "popularity",
+        includeUnrunnableActors: Boolean = true
+    ): Result<ApifyStorePage> = withContext(Dispatchers.IO) {
         val token = apiTokenProvider()?.trim()
         try {
             val response: HttpResponse = httpClient.get("$BASE_URL/store") {
@@ -129,10 +130,15 @@ class ApifyClient(
                         append(HttpHeaders.Authorization, "Bearer $token")
                     }
                 }
-                parameter("search", query)
+                if (query.isNotBlank()) {
+                    parameter("search", query.trim())
+                }
                 parameter("limit", limit)
                 parameter("offset", offset)
                 parameter("sortBy", sortBy)
+                if (includeUnrunnableActors) {
+                    parameter("includeUnrunnableActors", "true")
+                }
             }
 
             val text = response.bodyAsText()
@@ -147,10 +153,65 @@ class ApifyClient(
             }
 
             val storeResp = json.decodeFromString<ApifyStoreResponse>(text)
-            val items = storeResp.data?.items ?: emptyList()
-            Result.success(items)
+            val data = storeResp.data
+            val page = ApifyStorePage(
+                total = data?.total ?: data?.items?.size ?: 0,
+                count = data?.count ?: data?.items?.size ?: 0,
+                offset = data?.offset ?: offset,
+                limit = data?.limit ?: limit,
+                items = data?.items ?: emptyList()
+            )
+            Result.success(page)
         } catch (e: Exception) {
             Log.e(TAG, "Failed searching Apify store: ${e.message}")
+            Result.failure(SpyError.NetworkError(e.message ?: "Network error", e))
+        }
+    }
+
+    /**
+     * Searches public Store for candidate Actors via GET /v2/store.
+     */
+    suspend fun searchStore(
+        query: String,
+        limit: Int = 10,
+        offset: Int = 0,
+        sortBy: String = "popularity"
+    ): Result<List<ApifyStoreItem>> = withContext(Dispatchers.IO) {
+        val pageResult = searchStorePage(query = query, limit = limit, offset = offset, sortBy = sortBy)
+        pageResult.map { it.items }
+    }
+
+    /**
+     * Fetches the default build for an Actor via GET /v2/acts/:actorId/builds/default.
+     */
+    suspend fun getActorDefaultBuild(actorId: String): Result<ApifyActorBuildData> = withContext(Dispatchers.IO) {
+        val canonicalId = ActorIdentifierResolver.toCanonicalApiId(actorId)
+        if (canonicalId.isBlank()) {
+            return@withContext Result.failure(SpyError.ActorNotFound("Blank Actor identifier"))
+        }
+
+        val token = apiTokenProvider()?.trim()
+        try {
+            val response: HttpResponse = httpClient.get("$BASE_URL/acts/$canonicalId/builds/default") {
+                headers {
+                    if (!token.isNullOrBlank()) {
+                        append(HttpHeaders.Authorization, "Bearer $token")
+                    }
+                }
+            }
+
+            val text = response.bodyAsText()
+
+            if (!response.status.isSuccess()) {
+                val err = parseApifyError(response, text, "GET /v2/acts/$canonicalId/builds/default")
+                return@withContext Result.failure(SpyError.NetworkError("Failed to fetch default build: $err"))
+            }
+
+            val buildResp = json.decodeFromString<ApifyActorBuildResponse>(text)
+            val data = buildResp.data ?: return@withContext Result.failure(SpyError.ActorUnavailable("No build data returned for $canonicalId"))
+            Result.success(data)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed fetching default build for $canonicalId: ${e.message}")
             Result.failure(SpyError.NetworkError(e.message ?: "Network error", e))
         }
     }

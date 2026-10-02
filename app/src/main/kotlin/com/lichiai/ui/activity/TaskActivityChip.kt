@@ -14,8 +14,8 @@ import androidx.compose.animation.fadeOut
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -30,19 +30,18 @@ import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Language
-import androidx.compose.material.icons.filled.PauseCircle
-import androidx.compose.material.icons.filled.SmartToy
+import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -82,11 +81,11 @@ fun ActivityKind.toTaskStatus(): TaskActivityStatus {
 }
 
 /**
- * High-Density Compact Inline Task Activity Chip.
- *
- * Placed inline directly with the assistant message.
- * Strict per-message binding: conversationId + messageId + taskId.
- * Minimalist collapsed footprint with smooth expansion for full execution details.
+ * Ultra-Compact Inline Task Status Indicator for LICHI-AI.
+ * 
+ * Replaces large bounding boxes/cards with a clean, tiny metadata line:
+ * e.g., "✓ Completed · 1 step" or "● Running · Browser"
+ * Positioned tightly between the assistant header and response text.
  */
 @Composable
 fun TaskActivityChip(
@@ -129,304 +128,227 @@ fun TaskActivityChip(
         label = "chip_rotation"
     )
 
-    Surface(
+    Column(
         modifier = modifier
             .wrapContentWidth(Alignment.Start)
             .testTag("task_activity_chip_${messageId}_${activity.requestId}")
-            .clip(RoundedCornerShape(12.dp))
-            .border(
-                width = 1.dp,
-                color = when (status) {
-                    TaskActivityStatus.FAILED -> MaterialTheme.colorScheme.error.copy(alpha = 0.4f)
-                    TaskActivityStatus.PAUSED -> MaterialTheme.colorScheme.tertiary.copy(alpha = 0.4f)
-                    TaskActivityStatus.COMPLETED -> MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f)
-                    else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.35f)
-                },
-                shape = RoundedCornerShape(12.dp)
-            ),
-        color = when (status) {
-            TaskActivityStatus.FAILED -> MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.22f)
-            TaskActivityStatus.PAUSED -> MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.22f)
-            TaskActivityStatus.COMPLETED -> MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.35f)
-            else -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.18f)
-        },
-        tonalElevation = 1.dp
+            .padding(vertical = 2.dp)
     ) {
-        Column(
+        // Ultra-Compact Inline Metadata Status Line
+        Row(
             modifier = Modifier
                 .wrapContentWidth(Alignment.Start)
-                .padding(horizontal = 10.dp, vertical = 7.dp)
-        ) {
-            // Compact Header Row
-            Row(
-                modifier = Modifier
-                    .wrapContentWidth(Alignment.Start)
-                    .clickable(enabled = hasDetails || isRunning) {
-                        isExpanded = !isExpanded
-                    },
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                // Status Icon Box
-                Box(
-                    modifier = Modifier
-                        .size(22.dp)
-                        .clip(CircleShape)
-                        .background(
-                            when (status) {
-                                TaskActivityStatus.FAILED -> MaterialTheme.colorScheme.errorContainer
-                                TaskActivityStatus.PAUSED -> MaterialTheme.colorScheme.tertiaryContainer
-                                TaskActivityStatus.COMPLETED -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.8f)
-                                else -> MaterialTheme.colorScheme.primary.copy(alpha = 0.2f)
-                            }
-                        ),
-                    contentAlignment = Alignment.Center
+                .clip(RoundedCornerShape(6.dp))
+                .clickable(
+                    enabled = hasDetails || isRunning,
+                    interactionSource = remember { MutableInteractionSource() },
+                    indication = ripple(bounded = true, radius = 12.dp)
                 ) {
-                    when (status) {
-                        TaskActivityStatus.SEARCHING -> {
-                            Icon(
-                                imageVector = Icons.Default.Language,
-                                contentDescription = "Searching",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier
-                                    .size(14.dp)
-                                    .rotate(rotationAnim)
-                            )
-                        }
-                        TaskActivityStatus.EXECUTING -> {
-                            if (activity.kind == ActivityKind.TERMINAL_EXECUTING) {
-                                Icon(
-                                    imageVector = Icons.Default.Terminal,
-                                    contentDescription = "Terminal",
-                                    tint = Color(0xFF00E676),
-                                    modifier = Modifier.size(13.dp)
-                                )
-                            } else {
-                                Icon(
-                                    imageVector = Icons.Default.SmartToy,
-                                    contentDescription = "Executing",
-                                    tint = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.size(13.dp)
-                                )
-                            }
-                        }
-                        TaskActivityStatus.WORKING -> {
-                            Icon(
-                                imageVector = Icons.Default.SmartToy,
-                                contentDescription = "Working",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                        TaskActivityStatus.FAILED -> {
-                            Icon(
-                                imageVector = Icons.Default.Warning,
-                                contentDescription = "Failed",
-                                tint = MaterialTheme.colorScheme.error,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                        TaskActivityStatus.PAUSED -> {
-                            Icon(
-                                imageVector = Icons.Default.PauseCircle,
-                                contentDescription = "Paused",
-                                tint = MaterialTheme.colorScheme.tertiary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                        }
-                        TaskActivityStatus.COMPLETED -> {
-                            Icon(
-                                imageVector = Icons.Default.CheckCircle,
-                                contentDescription = "Completed",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(14.dp)
-                            )
-                        }
-                    }
+                    isExpanded = !isExpanded
                 }
-
-                Spacer(Modifier.width(8.dp))
-
-                // Title + Subtitle inline
-                Column {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        AnimatedContent(
-                            targetState = activity.title.ifBlank {
-                                when (status) {
-                                    TaskActivityStatus.SEARCHING -> "Searching web"
-                                    TaskActivityStatus.EXECUTING -> "Executing task"
-                                    TaskActivityStatus.COMPLETED -> "Task completed"
-                                    TaskActivityStatus.FAILED -> "Task failed"
-                                    else -> "Working"
-                                }
-                            },
-                            transitionSpec = { fadeIn(tween(150)) togetherWith fadeOut(tween(150)) },
-                            label = "task_chip_title"
-                        ) { titleText ->
-                            Text(
-                                text = titleText,
-                                style = MaterialTheme.typography.labelMedium.copy(
-                                    fontWeight = FontWeight.SemiBold,
-                                    fontSize = 12.5.sp
-                                ),
-                                color = if (status == TaskActivityStatus.FAILED) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurface,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-
-                        if (activity.subtitle.isNotBlank()) {
-                            Text(
-                                text = "· ${activity.subtitle}",
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.8f),
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
-                    }
+                .padding(vertical = 2.dp, horizontal = 2.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            // Tiny status glyph
+            when {
+                isRunning -> {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(11.dp),
+                        strokeWidth = 1.6.dp,
+                        color = MaterialTheme.colorScheme.primary
+                    )
                 }
-
-                // Trailing spinner or chevron
-                if (isRunning) {
-                    Box(modifier = Modifier.padding(start = 6.dp)) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(12.dp),
-                            strokeWidth = 1.8.dp,
-                            color = MaterialTheme.colorScheme.primary
-                        )
-                    }
-                } else if (hasDetails) {
+                status == TaskActivityStatus.COMPLETED -> {
                     Icon(
-                        imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
-                        contentDescription = if (isExpanded) "Collapse" else "Expand details",
-                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                        imageVector = Icons.Default.Check,
+                        contentDescription = "Completed",
+                        tint = Color(0xFF10B981),
+                        modifier = Modifier.size(12.5.dp)
+                    )
+                }
+                status == TaskActivityStatus.FAILED -> {
+                    Icon(
+                        imageVector = Icons.Default.Warning,
+                        contentDescription = "Failed",
+                        tint = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.size(12.5.dp)
+                    )
+                }
+                status == TaskActivityStatus.PAUSED -> {
+                    Icon(
+                        imageVector = Icons.Default.Pause,
+                        contentDescription = "Paused",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.size(12.dp)
+                    )
+                }
+                else -> {
+                    Box(
                         modifier = Modifier
-                            .padding(start = 4.dp)
-                            .size(16.dp)
+                            .size(6.dp)
+                            .clip(CircleShape)
+                            .background(MaterialTheme.colorScheme.primary)
                     )
                 }
             }
 
-            // Expandable Step Execution Details
-            AnimatedVisibility(
-                visible = isExpanded && hasDetails,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
-            ) {
-                Column(
+            Spacer(Modifier.width(5.dp))
+
+            // Concise Label: "Completed · 1 step"
+            val stepCount = activity.stepHistory.size
+            val stepLabel = if (stepCount > 0) " · $stepCount step${if (stepCount > 1) "s" else ""}" else ""
+            val defaultTitle = when (status) {
+                TaskActivityStatus.SEARCHING -> "Searching web"
+                TaskActivityStatus.EXECUTING -> if (activity.kind == ActivityKind.TERMINAL_EXECUTING) "Terminal" else "Executing"
+                TaskActivityStatus.COMPLETED -> "Completed$stepLabel"
+                TaskActivityStatus.FAILED -> "Failed$stepLabel"
+                else -> "Thinking"
+            }
+            val titleText = activity.title.ifBlank { defaultTitle }
+
+            Text(
+                text = titleText,
+                style = MaterialTheme.typography.labelSmall.copy(
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Medium
+                ),
+                color = when (status) {
+                    TaskActivityStatus.FAILED -> MaterialTheme.colorScheme.error
+                    TaskActivityStatus.COMPLETED -> MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f)
+                    else -> MaterialTheme.colorScheme.primary
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+
+            if (activity.subtitle.isNotBlank() && status != TaskActivityStatus.COMPLETED) {
+                Text(
+                    text = " · ${activity.subtitle}",
+                    style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+
+            // Tiny Chevron if details exist
+            if (hasDetails && !isRunning) {
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                    contentDescription = if (isExpanded) "Collapse" else "Expand details",
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
                     modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(top = 8.dp)
-                ) {
-                    if (hasHistory) {
-                        Text(
-                            text = "Steps (${activity.stepHistory.size})",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 10.5.sp
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 4.dp)
-                        )
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(8.dp))
-                                .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
-                                .padding(horizontal = 8.dp, vertical = 6.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp)
-                        ) {
-                            activity.stepHistory.forEach { step ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    if (step.isFailed) {
-                                        Icon(
-                                            imageVector = Icons.Default.Warning,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.error,
-                                            modifier = Modifier.size(11.dp)
-                                        )
-                                    } else if (!step.isCompleted) {
-                                        CircularProgressIndicator(
-                                            modifier = Modifier.size(10.dp),
-                                            strokeWidth = 1.5.dp,
-                                            color = MaterialTheme.colorScheme.primary
-                                        )
-                                    } else {
-                                        Icon(
-                                            imageVector = Icons.Default.CheckCircle,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.primary,
-                                            modifier = Modifier.size(11.dp)
-                                        )
-                                    }
-                                    Spacer(Modifier.width(6.dp))
-                                    Text(
-                                        text = step.title,
-                                        style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
-                                        color = MaterialTheme.colorScheme.onSurface,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis
+                        .padding(start = 2.dp)
+                        .size(13.dp)
+                )
+            }
+        }
+
+        // Expandable Step Execution Details (Tucked in smoothly when expanded)
+        AnimatedVisibility(
+            visible = isExpanded && hasDetails,
+            enter = expandVertically() + fadeIn(),
+            exit = shrinkVertically() + fadeOut()
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(top = 4.dp, bottom = 4.dp)
+            ) {
+                if (hasHistory) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(8.dp))
+                            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f))
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp)
+                    ) {
+                        activity.stepHistory.forEach { step ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                if (step.isFailed) {
+                                    Icon(
+                                        imageVector = Icons.Default.Warning,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error,
+                                        modifier = Modifier.size(11.dp)
+                                    )
+                                } else if (!step.isCompleted) {
+                                    CircularProgressIndicator(
+                                        modifier = Modifier.size(10.dp),
+                                        strokeWidth = 1.5.dp,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                } else {
+                                    Icon(
+                                        imageVector = Icons.Default.Check,
+                                        contentDescription = null,
+                                        tint = Color(0xFF10B981),
+                                        modifier = Modifier.size(11.dp)
                                     )
                                 }
+                                Spacer(Modifier.width(6.dp))
+                                Text(
+                                    text = step.title,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.onSurface,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis
+                                )
                             }
                         }
-                        if (hasSources || hasImages || activity.detailNotes.isNotEmpty()) {
-                            Spacer(Modifier.height(6.dp))
-                        }
                     }
-
-                    if (activity.detailNotes.isNotEmpty()) {
-                        activity.detailNotes.take(2).forEach { note ->
-                            Text(
-                                text = "• \"$note\"",
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
-                                modifier = Modifier.padding(bottom = 2.dp)
-                            )
-                        }
+                    if (hasSources || hasImages || activity.detailNotes.isNotEmpty()) {
                         Spacer(Modifier.height(4.dp))
                     }
+                }
 
-                    if (activity.disagreementNotice != null) {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
-                                .padding(horizontal = 6.dp, vertical = 4.dp)
-                        ) {
-                            Text(
-                                text = activity.disagreementNotice,
-                                style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
-                                color = MaterialTheme.colorScheme.onPrimaryContainer
-                            )
-                        }
-                        Spacer(Modifier.height(4.dp))
-                    }
-
-                    if (hasImages) {
-                        WebImagesGrid(images = activity.images)
-                        if (hasSources) Spacer(Modifier.height(6.dp))
-                    }
-
-                    if (hasSources) {
+                if (activity.detailNotes.isNotEmpty()) {
+                    activity.detailNotes.take(2).forEach { note ->
                         Text(
-                            text = "Sources (${activity.sources.size})",
-                            style = MaterialTheme.typography.labelSmall.copy(
-                                fontWeight = FontWeight.SemiBold,
-                                fontSize = 10.5.sp
-                            ),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(bottom = 4.dp)
+                            text = "• \"$note\"",
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.85f),
+                            modifier = Modifier.padding(bottom = 2.dp)
                         )
-                        WebSourcesList(sources = activity.sources)
                     }
+                }
+
+                if (activity.disagreementNotice != null) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f))
+                            .padding(horizontal = 6.dp, vertical = 4.dp)
+                    ) {
+                        Text(
+                            text = activity.disagreementNotice,
+                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.5.sp),
+                            color = MaterialTheme.colorScheme.onPrimaryContainer
+                        )
+                    }
+                }
+
+                if (hasImages) {
+                    WebImagesGrid(images = activity.images)
+                    if (hasSources) Spacer(Modifier.height(4.dp))
+                }
+
+                if (hasSources) {
+                    Text(
+                        text = "Sources (${activity.sources.size})",
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontWeight = FontWeight.SemiBold,
+                            fontSize = 10.5.sp
+                        ),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 2.dp)
+                    )
+                    WebSourcesList(sources = activity.sources)
                 }
             }
         }

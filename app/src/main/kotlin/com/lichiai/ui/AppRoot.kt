@@ -38,7 +38,7 @@ import com.lichiai.ui.voice.VoiceSettingsScreen
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
-private enum class Screen { Chat, Settings, Providers, ProviderEdit, Assistants, Voice, VoiceSettings, HandleMyCalls, CallDiagnostics, DynamicIsland, Skills, WebSearchSettings, AgentVision, Browser, Reminders, Terminal }
+private enum class Screen { Chat, Settings, Providers, ProviderEdit, Assistants, Voice, VoiceSettings, HandleMyCalls, CallDiagnostics, DynamicIsland, Skills, WebSearchSettings, AgentVision, Browser, Reminders, Terminal, PlatformIntelligence, SpyReport }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -47,6 +47,7 @@ fun AppRoot(vm: ChatViewModel) {
     val scope = rememberCoroutineScope()
     val browserController = vm.browserController
     var screen by rememberSaveable { mutableStateOf(Screen.Chat) }
+    var currentReportId by rememberSaveable { mutableStateOf<String?>(null) }
     var showModelPicker by rememberSaveable { mutableStateOf(false) }
     var editingProvider by remember { mutableStateOf<ProviderConfig?>(null) }
 
@@ -109,6 +110,12 @@ fun AppRoot(vm: ChatViewModel) {
         screen = Screen.Chat
     }
     androidx.activity.compose.BackHandler(enabled = screen == Screen.Terminal) {
+        screen = Screen.Chat
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.PlatformIntelligence) {
+        screen = Screen.Settings
+    }
+    androidx.activity.compose.BackHandler(enabled = screen == Screen.SpyReport) {
         screen = Screen.Chat
     }
 
@@ -252,7 +259,11 @@ fun AppRoot(vm: ChatViewModel) {
                             } else showModelPicker = true
                         },
                         onOpenVoiceMode = { screen = Screen.Voice },
-                        onOpenBrowser = { screen = Screen.Browser }
+                        onOpenBrowser = { screen = Screen.Browser },
+                        onOpenReport = { reportId ->
+                            currentReportId = reportId
+                            screen = Screen.SpyReport
+                        }
                     )
                 }
             }
@@ -271,6 +282,8 @@ fun AppRoot(vm: ChatViewModel) {
                     onOpenDynamicIsland = { screen = Screen.DynamicIsland },
                     onOpenSkills = { screen = Screen.Skills },
                     onOpenWebSearch = { screen = Screen.WebSearchSettings },
+                    onOpenNotificationSettings = { /* handle notification settings */ },
+                    onOpenPlatformIntelligence = { screen = Screen.PlatformIntelligence },
                     onOpenAgentVision = { screen = Screen.AgentVision },
                     onOpenReminders = { screen = Screen.Reminders },
                     onOpenTerminal = { screen = Screen.Terminal }
@@ -394,6 +407,18 @@ fun AppRoot(vm: ChatViewModel) {
             Screen.Terminal -> {
                 com.lichiai.terminal.ui.TerminalScreen(
                     terminalManager = vm.terminalManager,
+                    onBack = { screen = Screen.Chat }
+                )
+            }
+            Screen.PlatformIntelligence -> {
+                com.lichiai.ui.spy.PlatformIntelligenceSettingsScreen(
+                    settingsRepository = vm.settingsRepo,
+                    onBack = { screen = Screen.Settings }
+                )
+            }
+            Screen.SpyReport -> {
+                com.lichiai.ui.spy.SpyReportScreen(
+                    reportId = currentReportId ?: "",
                     onBack = { screen = Screen.Chat }
                 )
             }

@@ -546,6 +546,24 @@ class CapabilityCatalogV2(
         ),
         CapabilitySpec(
             capability = LichiCapability.CHAT,
+            name = "memory_forget",
+            purpose = "Delete, forget, or tombstone stored personal memory facts, residence, preferences, or details from long-term memory.",
+            whenToUse = "When the user explicitly asks to forget, delete, or erase personal memories, past details, residence, phone, or name ('forget my address', 'mere phone number ko bhool jao', 'delete my memory').",
+            whenNotToUse = "When the user asks general chat questions or is not commanding memory deletion.",
+            supportedActions = listOf(
+                ActionSpec(
+                    actionName = "FORGET",
+                    description = "Tombstone and forget specific memory facts or entities.",
+                    requiredParameters = listOf("query"),
+                    optionalParameters = listOf("target_entity"),
+                    exampleArguments = mapOf("query" to "address", "target_entity" to "user_residence")
+                )
+            ),
+            riskLevel = RiskLevel.LOW,
+            verificationDescription = "Verified via AmnesiaTombstoneManager cache and Room entity status."
+        ),
+        CapabilitySpec(
+            capability = LichiCapability.CHAT,
             name = "Conversational AI",
             purpose = "Conversational explanations, guidance, answering questions, or chit-chat.",
             whenToUse = "When user asks general knowledge questions, requests advice, or has conversational dialogue.",

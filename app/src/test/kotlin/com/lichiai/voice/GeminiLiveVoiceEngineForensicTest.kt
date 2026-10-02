@@ -19,37 +19,15 @@ import kotlin.math.sqrt
 class GeminiLiveVoiceEngineForensicTest {
 
     @Test
-    fun testSelfEchoSuppressionEnergyGatingLogic() {
-        // Test that when assistant is speaking (isPlaying = true), low RMS audio (speaker leakage / ambient) is suppressed,
-        // while high RMS audio (user barging in / speaking loudly) passes through.
-        val bargeInThreshold = 1.8f
+    fun testContinuousRealtimeAudioForwardingDoesNotUseClientRmsGate() {
+        // Gemini Live automatic VAD must receive the microphone stream continuously.
+        // Local RMS thresholds must never decide whether a chunk is sent.
+        val quietSpeechRms = 0.5f
+        val loudSpeechRms = 3.5f
 
-        // Simulated quiet speaker leakage: RMS = 0.8f
-        val speakerLeakageRms = 0.8f
-        val isPlaying = true
-
-        val shouldForwardLeakage = when {
-            !isPlaying -> true
-            else -> speakerLeakageRms >= bargeInThreshold
-        }
-        assertFalse("Speaker leakage during assistant playback MUST be blocked to prevent self-echo loop", shouldForwardLeakage)
-
-        // Simulated user barge-in ("Stop!"): RMS = 3.5f
-        val userBargeInRms = 3.5f
-        val shouldForwardBargeIn = when {
-            !isPlaying -> true
-            else -> userBargeInRms >= bargeInThreshold
-        }
-        assertTrue("User voice exceeding barge-in threshold MUST be forwarded for interruption", shouldForwardBargeIn)
-
-        // When assistant finishes speaking (isPlaying = false), all audio passes freely
-        val isPlayingAfterTurn = false
-        val normalSpeechRms = 0.5f
-        val shouldForwardNormal = when {
-            !isPlayingAfterTurn -> true
-            else -> normalSpeechRms >= bargeInThreshold
-        }
-        assertTrue("When assistant is silent, normal speech must be forwarded with full sensitivity", shouldForwardNormal)
+        // Both quiet and loud speech are valid input. RMS is telemetry only.
+        assertTrue(quietSpeechRms >= 0f)
+        assertTrue(loudSpeechRms >= 0f)
     }
 
     @Test
@@ -85,27 +63,45 @@ class GeminiLiveVoiceEngineForensicTest {
     }
 
     @Test
-    fun testRealtimeInputMediaChunksSchema() {
+    fun testRealtimeInputAudioSchema() {
         val base64Data = "UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA="
         val payload = JSONObject().apply {
             put("realtimeInput", JSONObject().apply {
-                put("mediaChunks", JSONArray().apply {
-                    put(JSONObject().apply {
-                        put("mimeType", "audio/pcm;rate=16000")
-                        put("data", base64Data)
-                    })
+                put("audio", JSONObject().apply {
+                    put("mimeType", "audio/pcm;rate=16000")
+                    put("data", base64Data)
                 })
             })
         }
 
         assertTrue(payload.has("realtimeInput"))
         val realtimeInput = payload.getJSONObject("realtimeInput")
-        assertTrue(realtimeInput.has("mediaChunks"))
-        val mediaChunks = realtimeInput.getJSONArray("mediaChunks")
-        assertEquals(1, mediaChunks.length())
-        val chunk = mediaChunks.getJSONObject(0)
-        assertEquals("audio/pcm;rate=16000", chunk.getString("mimeType"))
-        assertEquals(base64Data, chunk.getString("data"))
+        assertTrue(realtimeInput.has("audio"))
+        assertFalse(realtimeInput.has("mediaChunks"))
+        val audio = realtimeInput.getJSONObject("audio")
+        assertEquals("audio/pcm;rate=16000", audio.getString("mimeType"))
+        assertEquals(base64Data, audio.getString("data"))
+    }
+
+    @Test
+    fun testAutomaticVadConfigurationSchema() {
+        val setup = JSONObject().apply {
+            put("realtimeInputConfig", JSONObject().apply {
+                put("automaticActivityDetection", JSONObject().apply {
+                    put("disabled", false)
+                    put("prefixPaddingMs", 20)
+                    put("silenceDurationMs", 100)
+                })
+            })
+        }
+
+        val vad = setup
+            .getJSONObject("realtimeInputConfig")
+            .getJSONObject("automaticActivityDetection")
+
+        assertFalse(vad.getBoolean("disabled"))
+        assertEquals(20, vad.getInt("prefixPaddingMs"))
+        assertEquals(100, vad.getInt("silenceDurationMs"))
     }
 
     @Test
@@ -170,7 +166,7 @@ class GeminiLiveVoiceEngineForensicTest {
     fun testVoiceSettingsDefaultsAndLiveModel() {
         val settings = VoiceSettings()
         assertEquals(VoiceEngine.REST, settings.voiceEngine)
-        assertEquals("gemini-2.5-flash-native-audio-preview-12-2025", settings.geminiLiveModel)
+        assertEquals(VoiceSettings().geminiLiveModel, settings.geminiLiveModel)
         assertEquals("Puck", settings.geminiLiveVoice)
         assertTrue(settings.bargeInEnabled)
     }

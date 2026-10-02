@@ -84,7 +84,8 @@ import com.lichiai.ui.LichiVisualTokens
 fun PlatformProfileCard(
     profile: PlatformProfile,
     modifier: Modifier = Modifier,
-    onAnalyzeWebsite: ((String) -> Unit)? = null
+    onAnalyzeWebsite: ((String) -> Unit)? = null,
+    onViewReport: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -583,6 +584,61 @@ fun PlatformProfileCard(
                         ) {
                             Text("Visit", fontSize = 11.5.sp)
                         }
+                    }
+                }
+            }
+
+            // 8. Full HTML Intelligence Report Button
+            if (!profile.reportId.isNullOrBlank() && onViewReport != null) {
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+                Surface(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onViewReport(profile.reportId) },
+                    shape = RoundedCornerShape(10.dp),
+                    color = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f),
+                    border = borderBrush(MaterialTheme.colorScheme.primary)
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.Public,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(20.dp)
+                            )
+                            Spacer(Modifier.width(10.dp))
+                            Column {
+                                Text(
+                                    text = "📑 View Full Intelligence HTML Report",
+                                    style = MaterialTheme.typography.labelLarge.copy(
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp
+                                    ),
+                                    color = MaterialTheme.colorScheme.onSurface
+                                )
+                                Text(
+                                    text = "Aggregated profiles, followers, metrics & source evidence",
+                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        Icon(
+                            imageVector = Icons.Default.OpenInNew,
+                            contentDescription = "Open report",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp)
+                        )
                     }
                 }
             }

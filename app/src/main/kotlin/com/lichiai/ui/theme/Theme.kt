@@ -27,43 +27,42 @@ import androidx.core.view.WindowCompat
  * Pure white / near-black backgrounds, hairline dividers, accent purple for primary.
  */
 private val LightColors = lightColorScheme(
-    primary = Color(0xFF6E5CFF),
+    primary = Color(0xFF7C3AED),
     onPrimary = Color.White,
-    primaryContainer = Color(0xFFEDE9FF),
-    onPrimaryContainer = Color(0xFF170B5C),
-    secondary = Color(0xFF6E5CFF),
+    primaryContainer = Color(0xFFEDE9FE),
+    onPrimaryContainer = Color(0xFF4C1D95),
+    secondary = Color(0xFF7C3AED),
     onSecondary = Color.White,
-    background = Color(0xFFFFFFFF),
-    onBackground = Color(0xFF111114),
+    background = Color(0xFFF7F8FD),
+    onBackground = Color(0xFF111827),
     surface = Color(0xFFFFFFFF),
-    onSurface = Color(0xFF111114),
-    surfaceVariant = Color(0xFFF3F2F7),
-    onSurfaceVariant = Color(0xFF6F6E78),
-    outline = Color(0xFFE3E1EA),
-    outlineVariant = Color(0xFFEEEDF2),
-    error = Color(0xFFE34864),
+    onSurface = Color(0xFF111827),
+    surfaceVariant = Color(0xFFF1F3F9),
+    onSurfaceVariant = Color(0xFF6B7280),
+    outline = Color(0xFFE5E7EB),
+    outlineVariant = Color(0xFFEEF2F6),
+    error = Color(0xFFEF4444),
     onError = Color.White
 )
 
-// Tightened dark scheme: lighter onSurfaceVariant for legibility, slightly bolder
-// surface contrast so subtle UI (chips, dividers, hint text) reads cleanly.
+// Tightened dark scheme: deep OLED dark background, elevated surface, legible onSurfaceVariant
 private val DarkColors = darkColorScheme(
-    primary = Color(0xFFB1A4FF),
-    onPrimary = Color(0xFF15093D),
-    primaryContainer = Color(0xFF3826A8),
-    onPrimaryContainer = Color(0xFFEDE7FF),
-    secondary = Color(0xFFB1A4FF),
-    onSecondary = Color(0xFF15093D),
-    background = Color(0xFF000000),
-    onBackground = Color(0xFFF2F1F7),
-    surface = Color(0xFF101013),
-    onSurface = Color(0xFFF2F1F7),
-    surfaceVariant = Color(0xFF24242C),
-    onSurfaceVariant = Color(0xFFC4C2D0),
-    outline = Color(0xFF3A3A45),
-    outlineVariant = Color(0xFF26262E),
-    error = Color(0xFFFF8FA0),
-    onError = Color(0xFF3D0011)
+    primary = Color(0xFFA78BFA),
+    onPrimary = Color(0xFF1E1B4B),
+    primaryContainer = Color(0xFF4C1D95),
+    onPrimaryContainer = Color(0xFFEDE9FE),
+    secondary = Color(0xFFA78BFA),
+    onSecondary = Color(0xFF1E1B4B),
+    background = Color(0xFF0D0E15),
+    onBackground = Color(0xFFF3F4F6),
+    surface = Color(0xFF171822),
+    onSurface = Color(0xFFF3F4F6),
+    surfaceVariant = Color(0xFF222433),
+    onSurfaceVariant = Color(0xFF9CA3AF),
+    outline = Color(0xFF2E3044),
+    outlineVariant = Color(0xFF1E202E),
+    error = Color(0xFFF87171),
+    onError = Color(0xFF450A0A)
 )
 
 private val AppTypography = Typography(

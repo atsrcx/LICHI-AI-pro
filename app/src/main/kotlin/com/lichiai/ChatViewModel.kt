@@ -286,6 +286,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             store.delete(id)
             if (_activeId.value == id) _activeId.value = null
+            val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(getApplication()).getCurrentUserId()
+            com.lichiai.memory.manager.MemoryContextGateway.deleteConversation(getApplication(), id, currentUserId)
         }
     }
 
@@ -535,13 +537,44 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     )
                 }
             store.upsert(initialConv)
-            runCatching { memoryEngine.recordTurn(conversationId = activeId, messageId = userMsgId, role = "user", content = trimmed) }
+            val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(getApplication()).getCurrentUserId()
+            runCatching {
+                com.lichiai.memory.manager.MemoryContextGateway.recordTurn(
+                    context = getApplication(),
+                    conversationId = activeId,
+                    messageId = userMsgId,
+                    role = "user",
+                    content = trimmed,
+                    userId = currentUserId
+                )
+            }
+
+            // 1. Build rolling short-term chat window for immediate in-flight context
+            val convSnapshot = store.snapshot().firstOrNull { it.id == activeId }
+            val rollingChatHistory = convSnapshot?.messages
+                ?.filter { it.role != "system" && it.content.isNotBlank() }
+                ?.takeLast(8)
+                ?.joinToString("\n") { "${it.role}: ${it.content}" } ?: ""
+
+            // 2. Retrieve MemoryPack before orchestrator or streaming LLM to ground execution context
+            val memoryPack = runCatching {
+                com.lichiai.memory.manager.MemoryContextGateway.retrieve(
+                    context = getApplication(),
+                    query = trimmed,
+                    conversationId = activeId,
+                    userId = currentUserId
+                )
+            }.getOrNull()
 
             var webSearchOverridePrompt = ""
             val stepsList = mutableListOf<com.lichiai.ui.activity.AssistantActivityStep>()
 
             if (attachments.isEmpty()) {
-                val intentCtx = intentContextBuilder.buildContext(_activeId.value)
+                val intentCtx = intentContextBuilder.buildContext(
+                    conversationId = _activeId.value,
+                    memoryPack = memoryPack,
+                    recentHistory = rollingChatHistory
+                )
 
                 _isStreaming.value = true
                 _liveActivityState.value = com.lichiai.ui.activity.AssistantActivityState(
@@ -598,12 +631,17 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     val failedSteps = stepsList.mapIndexed { idx, s ->
                         if (idx == stepsList.lastIndex) s.copy(isCompleted = false, isFailed = true) else s.copy(isCompleted = true)
                     }
+                    val lastStep = failedSteps.lastOrNull()
+                    val failureSubtitle = if (lastStep != null) {
+                        "Failed at step ${lastStep.stepIndex}: ${lastStep.title}"
+                    } else "Task failed"
+
                     val failedActivity = com.lichiai.ui.activity.AssistantActivityState(
                         requestId = requestId,
                         messageId = assistantMsgId,
                         kind = com.lichiai.ui.activity.ActivityKind.FAILED,
                         title = "Task failed",
-                        subtitle = if (stepsList.isNotEmpty()) "Failed at step ${stepsList.size}" else "",
+                        subtitle = failureSubtitle,
                         isActive = false,
                         stepHistory = failedSteps
                     )
@@ -679,6 +717,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                             conversationId = activeId
                         )
                     }
+                    com.lichiai.memory.manager.MemoryContextGateway.recordTurn(
+                        context = getApplication(),
+                        conversationId = activeId,
+                        messageId = assistantMsgId,
+                        role = "assistant",
+                        content = finalMsgContent,
+                        userId = currentUserId
+                    )
 
                     if (orchResult.requiresBrowserUi) {
                         _browserNavigationEvent.emit(Unit)
@@ -731,7 +777,6 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             }
 
             val historyForApi = mutableListOf<ChatMessage>()
-            val memoryPack = runCatching { memoryEngine.getMemoryPack(trimmed, activeId) }.getOrNull()
             val memoryContext = memoryPack?.formattedPromptContext ?: ""
             val effectiveSystemPrompt = LichiPromptAssembler.assembleSystemPrompt(
                 assistant = activeAsstProfile,
@@ -745,8 +790,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 historyForApi.add(ChatMessage("system", effectiveSystemPrompt))
             }
 
-            val convSnapshot = store.snapshot().firstOrNull { it.id == activeId }
-            convSnapshot?.messages
+            val activeConv = store.snapshot().firstOrNull { it.id == activeId }
+            activeConv?.messages
                 ?.filter { it.role != "system" && !(it.role == "assistant" && it.content.isEmpty()) }
                 ?.forEach { msg ->
                     val imgs = msg.attachments.filter { it.type == "image" }
@@ -883,7 +928,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     if (finalContent.isNotEmpty()) {
                         _streamingOverlay.value = assistantMsgId to finalContent
                         updateAssistantMessage(activeId, assistantMsgId, content = finalContent, taskActivity = completedActivity)
-                        memoryEngine.recordTurnAsync(conversationId = activeId, messageId = assistantMsgId, role = "assistant", content = finalContent)
+                        com.lichiai.memory.manager.MemoryContextGateway.recordTurn(
+                            context = getApplication(),
+                            conversationId = activeId,
+                            messageId = assistantMsgId,
+                            role = "assistant",
+                            content = finalContent,
+                            userId = currentUserId
+                        )
                         intentContextBuilder.recordExecution(
                             capability = com.lichiai.intent.model.LichiCapability.CHAT,
                             userGoal = trimmed,
@@ -915,7 +967,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val lastUserIdx = msgs.indexOfLast { it.role == "user" }
             if (lastUserIdx < 0) return@launch
             val lastUser = msgs[lastUserIdx]
-            val trimmed = msgs.subList(0, lastUserIdx + 1)
+            val droppedMsgs = msgs.subList(lastUserIdx, msgs.size)
+            val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(getApplication()).getCurrentUserId()
+            for (m in droppedMsgs) {
+                com.lichiai.memory.manager.MemoryContextGateway.deleteMessage(getApplication(), m.id, currentUserId)
+            }
+            val trimmed = msgs.subList(0, lastUserIdx)
             store.upsert(conv.copy(messages = trimmed, updatedAt = System.currentTimeMillis()))
             sendMessage(lastUser.content, lastUser.attachments)
         }
@@ -931,7 +988,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             if (idx < 0) return@launch
             val target = msgs[idx]
             if (target.role != "user") return@launch
-            val trimmed = msgs.subList(0, idx + 1)
+            val droppedMsgs = msgs.subList(idx, msgs.size)
+            val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(getApplication()).getCurrentUserId()
+            for (m in droppedMsgs) {
+                com.lichiai.memory.manager.MemoryContextGateway.deleteMessage(getApplication(), m.id, currentUserId)
+            }
+            val trimmed = msgs.subList(0, idx)
             store.upsert(conv.copy(messages = trimmed, updatedAt = System.currentTimeMillis()))
             sendMessage(target.content, target.attachments)
         }
@@ -944,6 +1006,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val conv = store.snapshot().firstOrNull { it.id == convId } ?: return@launch
             val newMsgs = conv.messages.filterNot { it.id == messageId }
             store.upsert(conv.copy(messages = newMsgs, updatedAt = System.currentTimeMillis()))
+            val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(getApplication()).getCurrentUserId()
+            com.lichiai.memory.manager.MemoryContextGateway.deleteMessage(getApplication(), messageId, currentUserId)
         }
     }
 
@@ -956,6 +1020,8 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 if (it.id == messageId) it.copy(content = newContent) else it
             }
             store.upsert(conv.copy(messages = newMsgs, updatedAt = System.currentTimeMillis()))
+            val currentUserId = com.lichiai.memory.identity.UserIdentityManager.getInstance(getApplication()).getCurrentUserId()
+            com.lichiai.memory.manager.MemoryContextGateway.updateMessageContent(getApplication(), messageId, newContent, currentUserId)
         }
     }
 

@@ -68,9 +68,12 @@ object BrowserVerifier {
         val lower = url.lowercase(Locale.ROOT)
         return lower.contains("google.com/search") ||
                 lower.contains("duckduckgo.com/?q=") ||
+                lower.contains("duckduckgo.com/html") ||
                 lower.contains("bing.com/search") ||
                 lower.contains("search.yahoo.com") ||
-                lower.contains("youtube.com/results")
+                lower.contains("youtube.com/results") ||
+                lower.contains("ecosia.org/search") ||
+                lower.contains("brave.com/search")
     }
 
     fun verifyNavigation(
@@ -87,30 +90,44 @@ object BrowserVerifier {
             )
         }
 
-        val targetDomain = extractDomain(targetUrl)
-        val currentDomain = extractDomain(current)
+        val targetDomain = extractDomain(targetUrl).lowercase(Locale.ROOT).removePrefix("www.")
+        val currentDomain = extractDomain(current).lowercase(Locale.ROOT).removePrefix("www.")
 
-        if (targetDomain.isNotBlank() && currentDomain.contains(targetDomain)) {
+        val domainMatches = targetDomain.isNotBlank() && (currentDomain == targetDomain || currentDomain.endsWith(".$targetDomain") || targetDomain.endsWith(".$currentDomain"))
+        if (!domainMatches) {
             return BrowserVerificationResult(
-                passed = true,
+                passed = false,
                 checkName = "verifyNavigation",
-                detail = "Successfully reached target domain: $currentDomain"
+                detail = "Current domain '$currentDomain' does not match expected target '$targetDomain' (Current: $current, Expected: $targetUrl)",
+                retryable = true
             )
         }
 
-        // Check if URL changed from previous
-        if (context.previousUrl != null && current != context.previousUrl) {
-            return BrowserVerificationResult(
-                passed = true,
-                checkName = "verifyNavigation",
-                detail = "Page navigated from ${context.previousUrl} to $current"
-            )
+        // If target URL had a specific path requested
+        val targetPath = extractPath(targetUrl).trimEnd('/')
+        val currentPath = extractPath(current).trimEnd('/')
+        if (targetPath.isNotBlank() && targetPath != "/") {
+            val pathMatches = currentPath == targetPath || currentPath.startsWith("$targetPath/") || currentPath.contains(targetPath)
+            return if (pathMatches) {
+                BrowserVerificationResult(
+                    passed = true,
+                    checkName = "verifyNavigation",
+                    detail = "Successfully reached target domain and path: $current"
+                )
+            } else {
+                BrowserVerificationResult(
+                    passed = false,
+                    checkName = "verifyNavigation",
+                    detail = "Target path mismatch: requested '$targetPath', but current path is '$currentPath' (URL: $current).",
+                    retryable = true
+                )
+            }
         }
 
         return BrowserVerificationResult(
-            passed = current != "about:blank",
+            passed = true,
             checkName = "verifyNavigation",
-            detail = "Page URL is $current"
+            detail = "Successfully reached target domain: $currentDomain"
         )
     }
 
@@ -118,55 +135,365 @@ object BrowserVerifier {
         query: String,
         context: BrowserTaskContext
     ): BrowserVerificationResult {
-        val count = context.extractedCandidates.size
         val url = context.currentUrl
-        return if (count > 0) {
-            BrowserVerificationResult(
-                passed = true,
-                checkName = "verifySearchResults",
-                detail = "Found $count search result candidate links on page."
-            )
-        } else if (url != "about:blank" && (
-                context.currentTitle.contains(query, ignoreCase = true) ||
-                url.contains("search", ignoreCase = true) ||
-                url.contains("google.com/search") ||
-                url.contains("duckduckgo.com") ||
-                url.contains("bing.com/search") ||
-                url.contains("youtube.com/results")
-            )) {
-            BrowserVerificationResult(
-                passed = true,
-                checkName = "verifySearchResults",
-                detail = "Search page loaded: ${context.currentTitle.ifBlank { url }}"
-            )
-        } else {
-            BrowserVerificationResult(
+        if (url.isBlank() || url == "about:blank" || !isSearchResultsPage(url)) {
+            return BrowserVerificationResult(
                 passed = false,
                 checkName = "verifySearchResults",
-                detail = "Search results page not confirmed (URL: $url).",
+                detail = "Current page is not a confirmed search results page (URL: $url).",
+                retryable = true
+            )
+        }
+
+        val count = context.extractedCandidates.size
+        val titleMatches = context.currentTitle.contains(query, ignoreCase = true)
+        val queryInUrl = url.contains(java.net.URLEncoder.encode(query, "UTF-8"), ignoreCase = true) ||
+                query.split(" ").filter { it.length > 2 }.any { url.contains(it, ignoreCase = true) }
+
+        if (count > 0 && (titleMatches || queryInUrl || context.interactiveElements.isNotEmpty())) {
+            return BrowserVerificationResult(
+                passed = true,
+                checkName = "verifySearchResults",
+                detail = "Search results confirmed for '$query' ($count candidate links, URL: $url)."
+            )
+        } else if (titleMatches || queryInUrl) {
+            return BrowserVerificationResult(
+                passed = true,
+                checkName = "verifySearchResults",
+                detail = "Search results page confirmed for '$query' (${context.currentTitle})."
+            )
+        } else {
+            return BrowserVerificationResult(
+                passed = false,
+                checkName = "verifySearchResults",
+                detail = "Query '$query' could not be confirmed in search results page (URL: $url).",
                 retryable = true
             )
         }
     }
 
+    fun verifyTypeText(
+        expectedText: String,
+        actualValue: String?,
+        isSensitive: Boolean = false,
+        elementFound: Boolean = true
+    ): BrowserVerificationResult {
+        if (!elementFound) {
+            return BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyTypeText",
+                detail = "Target text field could not be found or identified in DOM.",
+                retryable = true
+            )
+        }
+
+        if (isSensitive) {
+            // Never compare or read sensitive fields directly
+            return BrowserVerificationResult(
+                passed = true,
+                checkName = "verifyTypeText",
+                detail = "Protected sensitive field interaction executed without reading secret."
+            )
+        }
+
+        val actual = actualValue?.trim() ?: ""
+        val expected = expectedText.trim()
+        val matches = actual == expected
+
+        return if (matches) {
+            BrowserVerificationResult(
+                passed = true,
+                checkName = "verifyTypeText",
+                detail = "Text verified in field: expected '$expectedText', observed '$actual'."
+            )
+        } else {
+            BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyTypeText",
+                detail = "Text mismatch: expected '$expectedText', but field contains '$actual'.",
+                retryable = true
+            )
+        }
+    }
+
+    fun verifyTypeText(
+        fieldIdOrSelector: String,
+        expectedText: String,
+        context: BrowserTaskContext
+    ): BrowserVerificationResult {
+        val matchedEl = context.interactiveElements.firstOrNull {
+            it.id.equals(fieldIdOrSelector, ignoreCase = true) ||
+                    it.name.equals(fieldIdOrSelector, ignoreCase = true) ||
+                    it.index.toString() == fieldIdOrSelector ||
+                    it.placeholder.contains(fieldIdOrSelector, ignoreCase = true)
+        }
+        val isSensitive = matchedEl?.type.equals("password", ignoreCase = true) ||
+                matchedEl?.name?.contains("password", ignoreCase = true) == true ||
+                matchedEl?.name?.contains("pin", ignoreCase = true) == true ||
+                matchedEl?.name?.contains("otp", ignoreCase = true) == true
+
+        return verifyTypeText(
+            expectedText = expectedText,
+            actualValue = matchedEl?.value,
+            isSensitive = isSensitive,
+            elementFound = matchedEl != null
+        )
+    }
+
+    fun verifyReload(
+        preGenerationId: String,
+        context: BrowserTaskContext
+    ): BrowserVerificationResult {
+        val isFreshGen = context.perceptionGenerationId.isNotBlank() && context.perceptionGenerationId != preGenerationId
+        val isLoaded = context.currentUrl.isNotBlank() && context.currentUrl != "about:blank"
+        return if (isFreshGen && isLoaded) {
+            BrowserVerificationResult(
+                passed = true,
+                checkName = "verifyReload",
+                detail = "Page reload verified with fresh DOM generation '${context.perceptionGenerationId}' (${context.currentUrl})."
+            )
+        } else {
+            BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyReload",
+                detail = "Page reload unverified: generation did not advance or page left blank.",
+                retryable = true
+            )
+        }
+    }
+
+    fun verifyBack(
+        preUrl: String,
+        context: BrowserTaskContext
+    ): BrowserVerificationResult {
+        val current = context.currentUrl
+        return if (current.isNotBlank() && current != "about:blank" && current != preUrl) {
+            BrowserVerificationResult(
+                passed = true,
+                checkName = "verifyBack",
+                detail = "History back navigation verified: navigated from '$preUrl' to '$current'."
+            )
+        } else {
+            BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyBack",
+                detail = "History back navigation did not produce URL change (Current: $current).",
+                retryable = true
+            )
+        }
+    }
+
+    fun verifyForward(
+        preUrl: String,
+        context: BrowserTaskContext
+    ): BrowserVerificationResult {
+        val current = context.currentUrl
+        return if (current.isNotBlank() && current != "about:blank" && current != preUrl) {
+            BrowserVerificationResult(
+                passed = true,
+                checkName = "verifyForward",
+                detail = "History forward navigation verified: navigated from '$preUrl' to '$current'."
+            )
+        } else {
+            BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyForward",
+                detail = "History forward navigation did not produce URL change (Current: $current).",
+                retryable = true
+            )
+        }
+    }
+
+    fun verifyScroll(
+        direction: com.lichiai.browser.api.ScrollDirection,
+        preScrollY: Int,
+        preMaxScrollY: Int,
+        postScrollY: Int,
+        postMaxScrollY: Int
+    ): BrowserVerificationResult {
+        return when (direction) {
+            com.lichiai.browser.api.ScrollDirection.DOWN -> {
+                if (postScrollY > preScrollY) {
+                    BrowserVerificationResult(
+                        passed = true,
+                        checkName = "verifyScroll",
+                        detail = "Scrolled DOWN from ${preScrollY}px to ${postScrollY}px."
+                    )
+                } else if (preScrollY >= preMaxScrollY && preMaxScrollY > 0) {
+                    BrowserVerificationResult(
+                        passed = true,
+                        checkName = "verifyScroll",
+                        detail = "Already at bottom boundary (${preScrollY}px >= ${preMaxScrollY}px); valid terminal state."
+                    )
+                } else {
+                    BrowserVerificationResult(
+                        passed = false,
+                        checkName = "verifyScroll",
+                        detail = "Scroll DOWN produced no movement (${preScrollY}px -> ${postScrollY}px, max: ${preMaxScrollY}px)."
+                    )
+                }
+            }
+            com.lichiai.browser.api.ScrollDirection.UP -> {
+                if (postScrollY < preScrollY) {
+                    BrowserVerificationResult(
+                        passed = true,
+                        checkName = "verifyScroll",
+                        detail = "Scrolled UP from ${preScrollY}px to ${postScrollY}px."
+                    )
+                } else if (preScrollY <= 0) {
+                    BrowserVerificationResult(
+                        passed = true,
+                        checkName = "verifyScroll",
+                        detail = "Already at top boundary (0px); valid terminal state."
+                    )
+                } else {
+                    BrowserVerificationResult(
+                        passed = false,
+                        checkName = "verifyScroll",
+                        detail = "Scroll UP produced no movement (${preScrollY}px -> ${postScrollY}px)."
+                    )
+                }
+            }
+            com.lichiai.browser.api.ScrollDirection.TOP -> {
+                BrowserVerificationResult(
+                    passed = postScrollY <= 0,
+                    checkName = "verifyScroll",
+                    detail = "Scrolled to top position (${postScrollY}px)."
+                )
+            }
+            com.lichiai.browser.api.ScrollDirection.BOTTOM -> {
+                BrowserVerificationResult(
+                    passed = postScrollY >= postMaxScrollY,
+                    checkName = "verifyScroll",
+                    detail = "Scrolled to bottom position (${postScrollY}px / ${postMaxScrollY}px)."
+                )
+            }
+        }
+    }
+
     fun verifyClick(
         previousUrl: String,
-        context: BrowserTaskContext
+        context: BrowserTaskContext,
+        targetDescription: String = "element"
     ): BrowserVerificationResult {
         val current = context.currentUrl
         return if (current.isNotBlank() && current != previousUrl && current != "about:blank") {
             BrowserVerificationResult(
                 passed = true,
                 checkName = "verifyClick",
-                detail = "Click triggered navigation to: $current"
+                detail = "Click on $targetDescription triggered navigation to: $current"
             )
-        } else {
-            // Even if URL didn't change, DOM state might have changed (e.g. modal opened or scroll)
+        } else if (context.pageMetrics.isLoaded && current != "about:blank") {
             BrowserVerificationResult(
                 passed = true,
                 checkName = "verifyClick",
-                detail = "Element clicked in page."
+                detail = "Click on $targetDescription executed on page ($current)."
             )
+        } else {
+            BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyClick",
+                detail = "Click on $targetDescription failed to execute or page left in blank state.",
+                retryable = true
+            )
+        }
+    }
+
+    fun verifyAction(
+        actionName: String,
+        preUrl: String,
+        preTitle: String,
+        context: BrowserTaskContext,
+        actionResult: com.lichiai.browser.actions.BrowserActionResult
+    ): BrowserVerificationResult {
+        if (!actionResult.isSuccess) {
+            return BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyAction_$actionName",
+                detail = actionResult.message.ifBlank { "Action '$actionName' execution failed." },
+                retryable = true
+            )
+        }
+        val currentUrl = context.currentUrl
+        return when (actionName) {
+            "goBack" -> verifyBack(preUrl, context)
+            "goForward" -> verifyForward(preUrl, context)
+            "reload" -> verifyReload(actionResult.generationId, context)
+            "openTab", "switchTab" -> {
+                BrowserVerificationResult(
+                    passed = currentUrl.isNotBlank(),
+                    checkName = "verifyAction_$actionName",
+                    detail = "Tab operation completed: active tab URL is '$currentUrl'."
+                )
+            }
+            "findOnPage" -> {
+                BrowserVerificationResult(
+                    passed = actionResult.isSuccess,
+                    checkName = "verifyAction_$actionName",
+                    detail = actionResult.message
+                )
+            }
+            else -> {
+                BrowserVerificationResult(
+                    passed = actionResult.isSuccess && currentUrl.isNotBlank() && currentUrl != "about:blank",
+                    checkName = "verifyAction_$actionName",
+                    detail = actionResult.message.ifBlank { "Action '$actionName' verified on page '$currentUrl'." }
+                )
+            }
+        }
+    }
+
+    fun verifyDownload(
+        downloadUrl: String,
+        downloadsList: List<com.lichiai.browser.downloads.BrowserDownloadItem>
+    ): BrowserVerificationResult {
+        val matchingItem = downloadsList.firstOrNull { it.url == downloadUrl || it.url.contains(downloadUrl.take(25)) }
+        if (matchingItem == null) {
+            return BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyDownload",
+                detail = "No download session registered for '$downloadUrl'.",
+                retryable = true
+            )
+        }
+        return when (matchingItem.status) {
+            com.lichiai.browser.downloads.DownloadStatus.COMPLETED -> BrowserVerificationResult(
+                passed = true,
+                checkName = "verifyDownload",
+                detail = "Download completed successfully: ${matchingItem.fileName} (${matchingItem.contentLength} bytes)."
+            )
+            com.lichiai.browser.downloads.DownloadStatus.DOWNLOADING -> BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyDownload",
+                detail = "Download in progress for ${matchingItem.fileName}.",
+                retryable = true
+            )
+            com.lichiai.browser.downloads.DownloadStatus.FAILED -> BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyDownload",
+                detail = "Download failed for ${matchingItem.fileName}."
+            )
+            com.lichiai.browser.downloads.DownloadStatus.CANCELLED -> BrowserVerificationResult(
+                passed = false,
+                checkName = "verifyDownload",
+                detail = "Download cancelled for ${matchingItem.fileName}."
+            )
+        }
+    }
+
+    fun extractPath(url: String): String {
+        return try {
+            val clean = url.trim()
+            if (clean.isBlank() || clean == "about:blank") return ""
+            val uri = java.net.URI(if (!clean.startsWith("http://") && !clean.startsWith("https://")) "https://$clean" else clean)
+            uri.path ?: ""
+        } catch (_: Exception) {
+            try {
+                val afterHost = url.substringAfter("://").substringAfter("/", "")
+                if (afterHost.isNotBlank()) "/${afterHost.substringBefore("?")}" else ""
+            } catch (_: Exception) {
+                ""
+            }
         }
     }
 
@@ -277,12 +604,19 @@ object BrowserVerifier {
         return score
     }
 
-    private fun extractDomain(url: String): String {
+    fun extractDomain(url: String): String {
         return try {
-            val uri = android.net.Uri.parse(url)
+            val clean = url.trim()
+            if (clean.isBlank() || clean == "about:blank") return ""
+            val uri = java.net.URI(if (!clean.startsWith("http://") && !clean.startsWith("https://")) "https://$clean" else clean)
             uri.host ?: ""
         } catch (_: Exception) {
-            ""
+            try {
+                val noProto = url.substringAfter("://").substringBefore("/").substringBefore("?").substringBefore(":")
+                noProto
+            } catch (_: Exception) {
+                ""
+            }
         }
     }
 }

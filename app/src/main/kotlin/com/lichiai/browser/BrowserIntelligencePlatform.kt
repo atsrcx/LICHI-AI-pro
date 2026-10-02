@@ -238,7 +238,8 @@ class BrowserIntelligencePlatform(
 
     // --- 6. Navigate Capability ---
     suspend fun executeNavigate(url: String): BrowserActionResult = withContext(Dispatchers.Main) {
-        actionEngine.executeAction(TypedBrowserAction.OpenURL(url))
+        val snapshot = perceptionLayer.observePage(browserController.activeEngine.value)
+        actionEngine.executeAction(TypedBrowserAction.OpenURL(url, generationId = snapshot.generationId))
     }
 
     // --- 7. Extract Capability ---
@@ -249,7 +250,8 @@ class BrowserIntelligencePlatform(
 
     // --- 8. FindOnPage Capability ---
     suspend fun executeFindOnPage(keyword: String): BrowserActionResult = withContext(Dispatchers.Main) {
-        actionEngine.executeAction(TypedBrowserAction.FindOnPage(keyword))
+        val snapshot = perceptionLayer.observePage(browserController.activeEngine.value)
+        actionEngine.executeAction(TypedBrowserAction.FindOnPage(keyword, generationId = snapshot.generationId))
     }
 
     // --- 9. Compare Capability ---
@@ -291,38 +293,44 @@ class BrowserIntelligencePlatform(
     ): List<BrowserActionResult> = withContext(Dispatchers.Main) {
         val results = mutableListOf<BrowserActionResult>()
         val snapshot = perceptionLayer.observePage(browserController.activeEngine.value)
+        val genId = snapshot.generationId
         for ((fieldIdOrName, value) in fieldValues) {
             val target = perceptionLayer.resolveElement(fieldIdOrName)
             val action = TypedBrowserAction.TypeText(
                 targetIdOrIndex = target?.semanticId ?: fieldIdOrName,
                 text = value,
-                submit = false
+                submit = false,
+                generationId = genId
             )
             results.add(actionEngine.executeAction(action))
         }
         if (submit) {
-            results.add(actionEngine.executeAction(TypedBrowserAction.SubmitForm()))
+            results.add(actionEngine.executeAction(TypedBrowserAction.SubmitForm(generationId = genId)))
         }
         results
     }
 
     // --- 12. Download Capability ---
     suspend fun executeDownload(url: String): BrowserActionResult = withContext(Dispatchers.Main) {
-        actionEngine.executeAction(TypedBrowserAction.Download(url))
+        val snapshot = perceptionLayer.observePage(browserController.activeEngine.value)
+        actionEngine.executeAction(TypedBrowserAction.Download(url, generationId = snapshot.generationId))
     }
 
     // --- 13. Upload Capability ---
     suspend fun executeUpload(targetIdOrIndex: String, filePath: String): BrowserActionResult = withContext(Dispatchers.Main) {
-        actionEngine.executeAction(TypedBrowserAction.Upload(targetIdOrIndex, filePath))
+        val snapshot = perceptionLayer.observePage(browserController.activeEngine.value)
+        actionEngine.executeAction(TypedBrowserAction.Upload(targetIdOrIndex, filePath, generationId = snapshot.generationId))
     }
 
     // --- 14. MultiTab Capability ---
     suspend fun executeMultiTab(action: String, tabId: String? = null, url: String? = null): BrowserActionResult = withContext(Dispatchers.Main) {
+        val snapshot = perceptionLayer.observePage(browserController.activeEngine.value)
+        val genId = snapshot.generationId
         when (action.uppercase()) {
-            "OPEN" -> actionEngine.executeAction(TypedBrowserAction.OpenNewTab(url))
-            "CLOSE" -> tabId?.let { actionEngine.executeAction(TypedBrowserAction.CloseTab(it)) }
+            "OPEN" -> actionEngine.executeAction(TypedBrowserAction.OpenNewTab(url, generationId = genId))
+            "CLOSE" -> tabId?.let { actionEngine.executeAction(TypedBrowserAction.CloseTab(it, generationId = genId)) }
                 ?: BrowserActionResult(ActionExecutionStatus.FAILED, "CloseTab", false, "Missing tabId")
-            "SWITCH" -> tabId?.let { actionEngine.executeAction(TypedBrowserAction.SwitchTab(it)) }
+            "SWITCH" -> tabId?.let { actionEngine.executeAction(TypedBrowserAction.SwitchTab(it, generationId = genId)) }
                 ?: BrowserActionResult(ActionExecutionStatus.FAILED, "SwitchTab", false, "Missing tabId")
             else -> BrowserActionResult(
                 status = ActionExecutionStatus.SUCCESS,

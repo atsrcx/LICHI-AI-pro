@@ -119,10 +119,112 @@ class MemoryStoreTool(
     }
 
     override suspend fun verify(call: ToolCall, result: ToolResult, context: ToolExecutionContext): VerificationResult {
+        if (!result.isSuccess) {
+            return VerificationResult(
+                isVerified = false,
+                verifiedState = "FAILED_TO_EXECUTE",
+                notes = "MemoryStoreTool execution was not marked as successful"
+            )
+        }
+        val fact = call.arguments["fact"]?.trim().orEmpty()
+        return try {
+            val userTurns = memoryEngine.database.rawLedgerDao().getTurns(context.conversationId)
+            val foundInLedger = userTurns.any { it.verbatimContent.contains(fact, ignoreCase = true) }
+            val pack = memoryEngine.getMemoryPack(fact, context.conversationId)
+            val foundInItems = pack.relevantFacts.any { it.value.contains(fact, ignoreCase = true) || fact.contains(it.value, ignoreCase = true) } ||
+                    pack.relevantPreferences.any { it.value.contains(fact, ignoreCase = true) || fact.contains(it.value, ignoreCase = true) }
+
+            if (foundInLedger || foundInItems || pack.coreProfile?.displayName?.equals(fact, ignoreCase = true) == true) {
+                VerificationResult(
+                    isVerified = true,
+                    verifiedState = "PERSISTED_AND_VERIFIED",
+                    notes = "Deterministic database read-back confirmed storage of memory fact."
+                )
+            } else {
+                VerificationResult(
+                    isVerified = false,
+                    verifiedState = "READ_BACK_MISMATCH",
+                    notes = "Deterministic database read-back could not find stored memory in raw ledger or active memory items."
+                )
+            }
+        } catch (e: Exception) {
+            VerificationResult(
+                isVerified = false,
+                verifiedState = "VERIFICATION_ERROR",
+                notes = "Error verifying memory database read-back: ${e.message}"
+            )
+        }
+    }
+}
+
+/**
+ * Real Long-Term Memory Forget / Tombstone Tool.
+ */
+class MemoryForgetTool(
+    private val memoryEngine: LichiMemoryEngine
+) : LichiTool {
+
+    override val definition = ToolDefinition(
+        id = "memory.forget",
+        name = "Forget Memory Fact",
+        description = "Deletes, forgets, or tombstones a personal fact, residence, preference, or detail from long-term memory.",
+        purpose = "Execute explicit user forget request and prevent data resurrection across memory.",
+        category = ToolCategory.MEMORY,
+        mappedCapability = LichiCapability.CHAT,
+        parameters = listOf(
+            ToolParameter("query", "string", "Text or description of the fact/detail to forget", required = true),
+            ToolParameter("target_entity", "string", "Optional specific entity canonical name or key", required = false)
+        ),
+        riskLevel = ToolRiskLevel.LOW_RISK_STATE_CHANGE,
+        requiresConfirmation = false,
+        idempotent = true,
+        timeoutMs = 5_000L,
+        changesWorldState = true
+    )
+
+    override suspend fun execute(call: ToolCall, context: ToolExecutionContext): ToolResult {
+        val query = call.arguments["query"]?.trim() ?: context.userGoal
+        val targetEntity = call.arguments["target_entity"]?.trim()
+        if (query.isBlank() && targetEntity.isNullOrBlank()) {
+            return ToolResult.failure(call.callId, definition.id, "Target memory to forget is empty.")
+        }
+
+        return try {
+            val success = memoryEngine.tombstoneMemoryByDescription(
+                description = query,
+                targetEntity = targetEntity,
+                conversationId = context.conversationId
+            )
+            if (success) {
+                ToolResult.success(
+                    callId = call.callId,
+                    toolId = definition.id,
+                    summary = "Successfully forgotten: '${targetEntity ?: query}'.",
+                    data = mapOf("forgotten" to (targetEntity ?: query))
+                )
+            } else {
+                ToolResult.failure(call.callId, definition.id, "Could not process forget request.")
+            }
+        } catch (e: Exception) {
+            ToolResult.failure(call.callId, definition.id, "Failed to forget memory: ${e.message}")
+        }
+    }
+
+    override suspend fun verify(call: ToolCall, result: ToolResult, context: ToolExecutionContext): VerificationResult {
+        if (!result.isSuccess) {
+            return VerificationResult(
+                isVerified = false,
+                verifiedState = "FORGET_FAILED",
+                notes = "MemoryForgetTool execution was not successful"
+            )
+        }
+        val query = call.arguments["query"]?.trim() ?: ""
+        val target = call.arguments["target_entity"]?.trim() ?: query
+        val isTombstoned = memoryEngine.tombstoneManager.isTombstoned(target)
         return VerificationResult(
-            isVerified = result.isSuccess,
-            verifiedState = "Saved to persistent SQLite memory database",
-            notes = "Checked memory ingestion pipeline"
+            isVerified = isTombstoned,
+            verifiedState = if (isTombstoned) "TOMBSTONED_AND_VERIFIED" else "TOMBSTONE_VERIFICATION_FAILED",
+            notes = if (isTombstoned) "Amnesia tombstone verified in memory cache" else "Tombstone record not found in cache"
         )
     }
 }

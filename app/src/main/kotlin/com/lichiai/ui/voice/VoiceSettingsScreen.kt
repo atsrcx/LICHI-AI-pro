@@ -79,6 +79,13 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Star
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
+import com.lichiai.voice.live.DiscoveredGeminiModel
+import com.lichiai.voice.live.GeminiLiveModelDiscovery
 import com.lichiai.data.ProviderStore
 import com.lichiai.data.SttMode
 import com.lichiai.data.TtsMode
@@ -154,15 +161,38 @@ fun VoiceSettingsScreen(
     var ttsEngines by remember { mutableStateOf<List<TtsEngineInfo>>(emptyList()) }
     var availableVoices by remember { mutableStateOf<List<TtsVoiceInfo>>(emptyList()) }
 
+    var discoveredLiveModels by remember { mutableStateOf<List<DiscoveredGeminiModel>>(GeminiLiveModelDiscovery.FALLBACK_LIVE_MODELS) }
+    var isFetchingLiveModels by remember { mutableStateOf(false) }
+    var modelSearchQuery by remember { mutableStateOf("") }
+    var filterLiveOnly by remember { mutableStateOf(false) }
+    var showCustomModelInput by remember { mutableStateOf(false) }
+    var customModelText by remember { mutableStateOf("") }
+
+    fun refreshLiveModels() {
+        scope.launch {
+            isFetchingLiveModels = true
+            val apiKey = GeminiKeyResolver.resolveApiKey(detectedGeminiProvider, providerStore) ?: ""
+            val baseUrl = detectedGeminiProvider?.baseUrl
+            val fetched = GeminiLiveModelDiscovery.fetchGeminiModels(apiKey, baseUrl)
+            discoveredLiveModels = fetched
+            isFetchingLiveModels = false
+        }
+    }
+
     fun refreshDiscovery() {
         sttProviders = SttProviderDiscovery.discoverProviders(context)
         ttsEngines = TtsEngineDiscovery.discoverEngines(context)
         availableVoices = orchestrator.getAvailableTtsVoices()
         VoskModelManager.checkModelState(context)
+        refreshLiveModels()
     }
 
     LaunchedEffect(Unit) {
         refreshDiscovery()
+    }
+
+    LaunchedEffect(detectedGeminiProvider) {
+        refreshLiveModels()
     }
 
     Scaffold(
@@ -365,82 +395,336 @@ fun VoiceSettingsScreen(
 
                                 Spacer(Modifier.height(12.dp))
 
-                                // Live Model Selection
-                                Text(
-                                    "Gemini Live Model",
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    fontWeight = FontWeight.Medium
-                                )
-                                Spacer(Modifier.height(4.dp))
-                                for (modelInfo in VoiceSettingsRepository.SUPPORTED_LIVE_MODELS) {
-                                    val isModelSelected = voiceSettings.geminiLiveModel == modelInfo.id
+                                // Live Model Selection Header & Refresh
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween
+                                ) {
+                                    Column(modifier = Modifier.weight(1f)) {
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            Text(
+                                                "Gemini Live Models",
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Surface(
+                                                shape = RoundedCornerShape(4.dp),
+                                                color = MaterialTheme.colorScheme.primaryContainer
+                                            ) {
+                                                Text(
+                                                    "${discoveredLiveModels.size} available",
+                                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                                    style = MaterialTheme.typography.labelSmall,
+                                                    color = MaterialTheme.colorScheme.onPrimaryContainer
+                                                )
+                                            }
+                                        }
+                                        Text(
+                                            "Dynamic models retrieved automatically via Gemini API",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                    }
+                                    IconButton(
+                                        onClick = { refreshLiveModels() },
+                                        enabled = !isFetchingLiveModels
+                                    ) {
+                                        if (isFetchingLiveModels) {
+                                            CircularProgressIndicator(
+                                                modifier = Modifier.size(18.dp),
+                                                strokeWidth = 2.dp
+                                            )
+                                        } else {
+                                            Icon(
+                                                Icons.Default.Refresh,
+                                                contentDescription = "Refresh Gemini Models from API",
+                                                tint = MaterialTheme.colorScheme.primary
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+
+                                // Active Model Card Highlight
+                                Card(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    colors = CardDefaults.cardColors(
+                                        containerColor = MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                                    ),
+                                    shape = RoundedCornerShape(10.dp)
+                                ) {
                                     Row(
                                         modifier = Modifier
                                             .fillMaxWidth()
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .clickable {
-                                                scope.launch {
-                                                    voiceSettingsRepository.updateGeminiLiveModel(modelInfo.id)
-                                                }
-                                            }
-                                            .padding(vertical = 6.dp, horizontal = 4.dp),
+                                            .padding(10.dp),
                                         verticalAlignment = Alignment.CenterVertically
                                     ) {
-                                        RadioButton(
-                                            selected = isModelSelected,
-                                            onClick = {
-                                                scope.launch {
-                                                    voiceSettingsRepository.updateGeminiLiveModel(modelInfo.id)
-                                                }
-                                            }
+                                        Icon(
+                                            Icons.Default.CheckCircle,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.primary,
+                                            modifier = Modifier.size(20.dp)
                                         )
-                                        Spacer(Modifier.width(6.dp))
-                                        Column {
-                                            Row(verticalAlignment = Alignment.CenterVertically) {
-                                                Text(
-                                                    modelInfo.displayName,
-                                                    style = MaterialTheme.typography.bodyMedium,
-                                                    fontWeight = if (isModelSelected) FontWeight.Bold else FontWeight.Normal
-                                                )
-                                                if (modelInfo.requiresThinkingConfig) {
-                                                    Spacer(Modifier.width(6.dp))
-                                                    Surface(
-                                                        shape = RoundedCornerShape(4.dp),
-                                                        color = MaterialTheme.colorScheme.secondaryContainer
-                                                    ) {
-                                                        Text(
-                                                            "Thinking",
-                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.onSecondaryContainer
-                                                        )
-                                                    }
-                                                }
-                                                if (modelInfo.isLegacy) {
-                                                    Spacer(Modifier.width(6.dp))
-                                                    Surface(
-                                                        shape = RoundedCornerShape(4.dp),
-                                                        color = MaterialTheme.colorScheme.surfaceVariant
-                                                    ) {
-                                                        Text(
-                                                            "Legacy",
-                                                            modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
-                                                            style = MaterialTheme.typography.labelSmall,
-                                                            color = MaterialTheme.colorScheme.onSurfaceVariant
-                                                        )
-                                                    }
-                                                }
-                                            }
+                                        Spacer(Modifier.width(8.dp))
+                                        Column(modifier = Modifier.weight(1f)) {
                                             Text(
-                                                modelInfo.description,
-                                                style = MaterialTheme.typography.bodySmall,
+                                                "Active Conversation Model",
+                                                style = MaterialTheme.typography.labelSmall,
                                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                                             )
                                             Text(
-                                                modelInfo.id,
-                                                style = MaterialTheme.typography.labelSmall,
-                                                color = MaterialTheme.colorScheme.outline
+                                                voiceSettings.geminiLiveModel,
+                                                style = MaterialTheme.typography.bodyMedium,
+                                                fontWeight = FontWeight.Bold,
+                                                color = MaterialTheme.colorScheme.primary
                                             )
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+
+                                // Search and Filters
+                                OutlinedTextField(
+                                    value = modelSearchQuery,
+                                    onValueChange = { modelSearchQuery = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                    placeholder = { Text("Search models (e.g. flash, 2.0, audio)...", style = MaterialTheme.typography.bodySmall) },
+                                    leadingIcon = {
+                                        Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    },
+                                    trailingIcon = {
+                                        if (modelSearchQuery.isNotBlank()) {
+                                            IconButton(onClick = { modelSearchQuery = "" }) {
+                                                Icon(Icons.Default.Close, contentDescription = "Clear search", modifier = Modifier.size(18.dp))
+                                            }
+                                        }
+                                    },
+                                    singleLine = true,
+                                    shape = RoundedCornerShape(10.dp)
+                                )
+
+                                Spacer(Modifier.height(6.dp))
+
+                                // Filter Chips
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    FilterChip(
+                                        selected = !filterLiveOnly,
+                                        onClick = { filterLiveOnly = false },
+                                        label = { Text("All (${discoveredLiveModels.size})", style = MaterialTheme.typography.labelSmall) }
+                                    )
+                                    FilterChip(
+                                        selected = filterLiveOnly,
+                                        onClick = { filterLiveOnly = true },
+                                        label = {
+                                            val count = discoveredLiveModels.count { it.isLiveRecommended || it.hasBidiSupport }
+                                            Text("Live / Realtime ($count)", style = MaterialTheme.typography.labelSmall)
+                                        }
+                                    )
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+
+                                // Filtered Model List
+                                val filteredModels = remember(discoveredLiveModels, modelSearchQuery, filterLiveOnly) {
+                                    discoveredLiveModels.filter { model ->
+                                        val matchesFilter = if (filterLiveOnly) (model.isLiveRecommended || model.hasBidiSupport) else true
+                                        val matchesQuery = if (modelSearchQuery.isBlank()) true else {
+                                            model.id.contains(modelSearchQuery, ignoreCase = true) ||
+                                                    model.displayName.contains(modelSearchQuery, ignoreCase = true) ||
+                                                    model.description.contains(modelSearchQuery, ignoreCase = true)
+                                        }
+                                        matchesFilter && matchesQuery
+                                    }
+                                }
+
+                                if (filteredModels.isEmpty()) {
+                                    Column(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(16.dp),
+                                        horizontalAlignment = Alignment.CenterHorizontally
+                                    ) {
+                                        Text(
+                                            "No models match '$modelSearchQuery'",
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                                        )
+                                        Spacer(Modifier.height(6.dp))
+                                        Button(
+                                            onClick = {
+                                                scope.launch {
+                                                    voiceSettingsRepository.updateGeminiLiveModel(modelSearchQuery.trim())
+                                                }
+                                            },
+                                            shape = RoundedCornerShape(8.dp)
+                                        ) {
+                                            Text("Use '$modelSearchQuery' as Model ID")
+                                        }
+                                    }
+                                } else {
+                                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                        for (model in filteredModels) {
+                                            val isModelSelected = voiceSettings.geminiLiveModel.equals(model.id, ignoreCase = true) ||
+                                                    voiceSettings.geminiLiveModel.equals(model.name, ignoreCase = true)
+                                            Card(
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .clickable {
+                                                        scope.launch {
+                                                            voiceSettingsRepository.updateGeminiLiveModel(model.id)
+                                                        }
+                                                    },
+                                                shape = RoundedCornerShape(8.dp),
+                                                colors = CardDefaults.cardColors(
+                                                    containerColor = if (isModelSelected)
+                                                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                                    else
+                                                        MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
+                                                )
+                                            ) {
+                                                Row(
+                                                    modifier = Modifier
+                                                        .fillMaxWidth()
+                                                        .padding(horizontal = 8.dp, vertical = 6.dp),
+                                                    verticalAlignment = Alignment.CenterVertically
+                                                ) {
+                                                    RadioButton(
+                                                        selected = isModelSelected,
+                                                        onClick = {
+                                                            scope.launch {
+                                                                voiceSettingsRepository.updateGeminiLiveModel(model.id)
+                                                            }
+                                                        }
+                                                    )
+                                                    Spacer(Modifier.width(6.dp))
+                                                    Column(modifier = Modifier.weight(1f)) {
+                                                        Row(
+                                                            verticalAlignment = Alignment.CenterVertically,
+                                                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                                        ) {
+                                                            Text(
+                                                                model.displayName,
+                                                                style = MaterialTheme.typography.bodyMedium,
+                                                                fontWeight = if (isModelSelected) FontWeight.Bold else FontWeight.Normal
+                                                            )
+                                                            if (model.hasBidiSupport || model.id.contains("exp", ignoreCase = true)) {
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(4.dp),
+                                                                    color = MaterialTheme.colorScheme.secondaryContainer
+                                                                ) {
+                                                                    Text(
+                                                                        "Live Bidi",
+                                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                                                        style = MaterialTheme.typography.labelSmall,
+                                                                        color = MaterialTheme.colorScheme.onSecondaryContainer
+                                                                    )
+                                                                }
+                                                            }
+                                                            if (model.isLiveRecommended) {
+                                                                Surface(
+                                                                    shape = RoundedCornerShape(4.dp),
+                                                                    color = MaterialTheme.colorScheme.tertiaryContainer
+                                                                ) {
+                                                                    Text(
+                                                                        "Recommended",
+                                                                        modifier = Modifier.padding(horizontal = 4.dp, vertical = 1.dp),
+                                                                        style = MaterialTheme.typography.labelSmall,
+                                                                        color = MaterialTheme.colorScheme.onTertiaryContainer
+                                                                    )
+                                                                }
+                                                            }
+                                                        }
+                                                        if (model.description.isNotBlank()) {
+                                                            Text(
+                                                                model.description,
+                                                                style = MaterialTheme.typography.bodySmall,
+                                                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                                                            )
+                                                        }
+                                                        Text(
+                                                            model.id,
+                                                            style = MaterialTheme.typography.labelSmall,
+                                                            color = MaterialTheme.colorScheme.outline
+                                                        )
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Spacer(Modifier.height(8.dp))
+
+                                // Custom Model Input Section
+                                if (!showCustomModelInput) {
+                                    OutlinedButton(
+                                        onClick = {
+                                            customModelText = voiceSettings.geminiLiveModel
+                                            showCustomModelInput = true
+                                        },
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(8.dp)
+                                    ) {
+                                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                                        Spacer(Modifier.width(6.dp))
+                                        Text("Enter Custom Gemini Model Name")
+                                    }
+                                } else {
+                                    Card(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        shape = RoundedCornerShape(10.dp),
+                                        colors = CardDefaults.cardColors(
+                                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)
+                                        )
+                                    ) {
+                                        Column(modifier = Modifier.padding(12.dp)) {
+                                            Text(
+                                                "Custom Model ID",
+                                                style = MaterialTheme.typography.bodySmall,
+                                                fontWeight = FontWeight.SemiBold
+                                            )
+                                            Spacer(Modifier.height(4.dp))
+                                            OutlinedTextField(
+                                                value = customModelText,
+                                                onValueChange = { customModelText = it },
+                                                modifier = Modifier.fillMaxWidth(),
+                                                placeholder = { Text("e.g. gemini-2.0-flash-exp") },
+                                                singleLine = true,
+                                                shape = RoundedCornerShape(8.dp)
+                                            )
+                                            Spacer(Modifier.height(8.dp))
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.End
+                                            ) {
+                                                OutlinedButton(
+                                                    onClick = { showCustomModelInput = false },
+                                                    shape = RoundedCornerShape(8.dp)
+                                                ) {
+                                                    Text("Cancel")
+                                                }
+                                                Spacer(Modifier.width(8.dp))
+                                                Button(
+                                                    onClick = {
+                                                        if (customModelText.isNotBlank()) {
+                                                            scope.launch {
+                                                                voiceSettingsRepository.updateGeminiLiveModel(customModelText.trim())
+                                                            }
+                                                        }
+                                                        showCustomModelInput = false
+                                                    },
+                                                    shape = RoundedCornerShape(8.dp)
+                                                ) {
+                                                    Text("Apply Model")
+                                                }
+                                            }
                                         }
                                     }
                                 }

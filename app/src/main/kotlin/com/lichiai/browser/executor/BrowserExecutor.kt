@@ -98,6 +98,18 @@ class BrowserExecutor(
             if (el.text.isNotBlank()) el.text else el.placeholder
         } ?: step.userSummary
 
+        val rawText = step.arguments["text"] ?: step.arguments["query"] ?: ""
+        val isSensitiveInput = step.arguments["type"]?.equals("password", ignoreCase = true) == true ||
+                step.arguments["name"]?.contains("password", ignoreCase = true) == true ||
+                step.arguments["name"]?.contains("pin", ignoreCase = true) == true ||
+                step.arguments["name"]?.contains("otp", ignoreCase = true) == true ||
+                step.arguments["name"]?.contains("cvv", ignoreCase = true) == true ||
+                step.toolName.contains("password", ignoreCase = true)
+
+        val safeMaskedText = if (actionType == VisualActionType.TYPE) {
+            if (isSensitiveInput) "***REDACTED***" else rawText
+        } else null
+
         AgentVisionTelemetryHub.emitEvent(
             AgentVisualEvent(
                 taskId = context.taskId,
@@ -108,8 +120,8 @@ class BrowserExecutor(
                 targetPosition = targetPos,
                 targetBounds = domBounds,
                 targetIdentifier = targetIdent,
-                textLength = if (actionType == VisualActionType.TYPE) (step.arguments["text"]?.length ?: 0) else 0,
-                typedMaskedText = if (actionType == VisualActionType.TYPE) step.arguments["text"] else null,
+                textLength = if (actionType == VisualActionType.TYPE) rawText.length else 0,
+                typedMaskedText = safeMaskedText,
                 scrollDeltaY = if (actionType == VisualActionType.SCROLL && step.arguments["direction"] == "UP") -1f else 1f,
                 operationalDescription = step.userSummary,
                 isPositionAvailable = domBounds != null
@@ -122,17 +134,27 @@ class BrowserExecutor(
 
         // 4. Deterministic Verification
         if (initialOk && step.requiresVerification) {
-            delay(1200) // allow page navigation / DOM response
+            com.lichiai.browser.runtime.BrowserConditionWaiter.waitForDomStable { (capabilityApi as? com.lichiai.browser.BrowserController)?.activeEngine?.value }
             val updatedContext = capabilityApi.getPageContext()
             val verifyResult = when (step.toolName) {
                 "navigate" -> BrowserVerifier.verifyNavigation(step.arguments["url"] ?: "", updatedContext)
                 "search" -> BrowserVerifier.verifySearchResults(step.arguments["query"] ?: "", updatedContext)
                 "clickCandidate", "clickElement", "clickSelector" -> BrowserVerifier.verifyClick(prevUrl, updatedContext)
                 "typeText" -> {
-                    val diff = BrowserVerifier.detectPageDifference(context, updatedContext)
-                    com.lichiai.browser.verifier.BrowserVerificationResult(true, "verifyType", "Typed text successfully (${diff.summary})")
+                    val fieldId = step.arguments["selector"] ?: step.arguments["index"] ?: ""
+                    val expectedVal = step.arguments["text"] ?: ""
+                    BrowserVerifier.verifyTypeText(fieldId, expectedVal, updatedContext)
                 }
-                else -> com.lichiai.browser.verifier.BrowserVerificationResult(true, "generic", "ok")
+                "scroll" -> {
+                    val dir = if (step.arguments["direction"]?.equals("UP", ignoreCase = true) == true) com.lichiai.browser.api.ScrollDirection.UP else com.lichiai.browser.api.ScrollDirection.DOWN
+                    BrowserVerifier.verifyScroll(dir, context.pageMetrics.scrollY, context.pageMetrics.maxScrollY, updatedContext.pageMetrics.scrollY, updatedContext.pageMetrics.maxScrollY)
+                }
+                else -> BrowserVerifier.verifyAction(step.toolName, prevUrl, context.currentTitle, updatedContext, com.lichiai.browser.actions.BrowserActionResult(
+                    status = com.lichiai.browser.actions.ActionExecutionStatus.SUCCESS,
+                    actionName = step.toolName,
+                    isSuccess = true,
+                    message = output
+                ))
             }
 
             if (!verifyResult.passed) {

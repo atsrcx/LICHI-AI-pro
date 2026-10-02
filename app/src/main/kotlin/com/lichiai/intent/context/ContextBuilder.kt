@@ -69,8 +69,20 @@ class ContextBuilder(
         val paused = peekPausedTask()
 
         return buildString {
+            // 0. User Long-Term Memory & Durable Facts
+            val memoryFormatted = snapshot.memoryPack?.formattedPromptContext
+            if (!memoryFormatted.isNullOrBlank()) {
+                val boundedMemory = if (memoryFormatted.length > 2000) memoryFormatted.take(2000).substringBeforeLast('\n') + "\n[Truncated]" else memoryFormatted
+                append("0. USER PERSISTENT MEMORY & FACTS:\n$boundedMemory\n\n")
+            }
+
             // 1. Current user instruction
             append("1. CURRENT INSTRUCTION: \"$rawInput\"\n")
+
+            // 1.1 In-Flight Immediate Conversation History
+            if (snapshot.inFlightHistory.isNotBlank()) {
+                append("\n1.1 IMMEDIATE ROLLING CONVERSATION HISTORY:\n${snapshot.inFlightHistory}\n")
+            }
 
             // 2. Active topic and goal
             if (!semanticCtx.activeTopic.isNullOrBlank()) {
@@ -124,10 +136,18 @@ class ContextBuilder(
     /**
      * Builds the current snapshot of IntentContext.
      */
-    suspend fun buildContext(conversationId: String? = null): IntentContext {
+    suspend fun buildContext(
+        conversationId: String? = null,
+        memoryPack: com.lichiai.memory.model.MemoryPack? = null,
+        recentHistory: String = ""
+    ): IntentContext {
         val currentSnapshot = _contextState.value
         val convId = conversationId?.takeIf { it.isNotBlank() } ?: currentSnapshot.conversationId ?: "default_session"
-        _contextState.update { it.copy(conversationId = convId) }
+        _contextState.update { it.copy(
+            conversationId = convId,
+            memoryPack = memoryPack ?: it.memoryPack,
+            inFlightHistory = recentHistory.ifBlank { it.inFlightHistory }
+        ) }
         val semanticCtx = continuityEngine.getContext(convId)
 
         var currentUrl: String? = null
@@ -164,7 +184,9 @@ class ContextBuilder(
             lastPlatform = activeProfile?.platform?.name ?: currentSnapshot.lastPlatform,
             lastUsername = activeProfile?.username ?: currentSnapshot.lastUsername,
             lastProfileUrl = activeProfile?.profileUrl ?: currentSnapshot.lastProfileUrl,
-            recentTurns = if (semanticCtx.recentTurns.isNotEmpty()) semanticCtx.recentTurns else currentSnapshot.recentTurns
+            recentTurns = if (semanticCtx.recentTurns.isNotEmpty()) semanticCtx.recentTurns else currentSnapshot.recentTurns,
+            memoryPack = memoryPack ?: currentSnapshot.memoryPack,
+            inFlightHistory = recentHistory.ifBlank { currentSnapshot.inFlightHistory }
         )
         _contextState.value = newContext
         return newContext

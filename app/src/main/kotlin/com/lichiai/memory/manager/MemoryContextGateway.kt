@@ -31,7 +31,10 @@ object MemoryContextGateway {
         return engine.getMemoryPack(
             query = query,
             conversationId = conversationId,
-            userId = resolvedUserId
+            userId = resolvedUserId,
+            activeTask = activeTask,
+            projectContext = projectContext,
+            temporalIntent = temporalIntent
         )
     }
 
@@ -46,10 +49,10 @@ object MemoryContextGateway {
         content: String,
         timestamp: Long = System.currentTimeMillis(),
         userId: String? = null
-    ) {
+    ): com.lichiai.memory.model.MemoryWriteResult {
         val engine = LichiMemoryEngine.getInstance(context)
         val resolvedUserId = userId ?: UserIdentityManager.getStableUserId(context)
-        engine.recordTurn(
+        return engine.recordTurn(
             conversationId = conversationId,
             messageId = messageId,
             role = role,
@@ -100,9 +103,71 @@ object MemoryContextGateway {
     suspend fun executeForget(
         context: Context,
         target: String,
-        conversationId: String? = null
+        conversationId: String? = null,
+        userId: String? = null
     ): Boolean {
         val engine = LichiMemoryEngine.getInstance(context)
-        return engine.executeForget(target = target, conversationId = conversationId)
+        val resolvedUserId = userId ?: UserIdentityManager.getStableUserId(context)
+        return engine.executeForget(target = target, conversationId = conversationId, userId = resolvedUserId)
+    }
+
+    /**
+     * Cascades deletion across all Room tables and vector indexes for a conversation.
+     */
+    suspend fun deleteConversation(
+        context: Context,
+        conversationId: String,
+        userId: String? = null
+    ) {
+        val engine = LichiMemoryEngine.getInstance(context)
+        val resolvedUserId = userId ?: UserIdentityManager.getStableUserId(context)
+        engine.deleteConversation(conversationId = conversationId, userId = resolvedUserId)
+    }
+
+    /**
+     * Deletes a single message turn from Room and vector index.
+     */
+    suspend fun deleteMessage(
+        context: Context,
+        messageId: String,
+        userId: String? = null
+    ) {
+        val engine = LichiMemoryEngine.getInstance(context)
+        val resolvedUserId = userId ?: UserIdentityManager.getStableUserId(context)
+        engine.deleteMessage(messageId = messageId, userId = resolvedUserId)
+    }
+
+    /**
+     * Updates message content in Room ledger and invalidates/regenerates vector embedding.
+     */
+    suspend fun updateMessageContent(
+        context: Context,
+        messageId: String,
+        newContent: String,
+        userId: String? = null
+    ) {
+        val engine = LichiMemoryEngine.getInstance(context)
+        val resolvedUserId = userId ?: UserIdentityManager.getStableUserId(context)
+        engine.updateMessageContent(messageId = messageId, newContent = newContent, userId = resolvedUserId)
+    }
+
+    /**
+     * Tombstones a memory item by natural language description or entity target.
+     */
+    suspend fun tombstoneMemoryByDescription(
+        context: Context,
+        description: String,
+        targetEntity: String? = null,
+        conversationId: String? = null,
+        userId: String? = null
+    ): Boolean {
+        val engine = LichiMemoryEngine.getInstance(context)
+        val resolvedUserId = userId ?: UserIdentityManager.getStableUserId(context)
+        return engine.tombstoneMemoryByDescription(
+            description = description,
+            targetEntity = targetEntity,
+            conversationId = conversationId,
+            userId = resolvedUserId
+        )
     }
 }

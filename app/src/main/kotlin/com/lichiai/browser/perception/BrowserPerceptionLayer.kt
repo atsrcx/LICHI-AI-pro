@@ -28,7 +28,10 @@ data class SemanticElement(
     val isClickable: Boolean,
     val isInput: Boolean,
     val value: String,
-    val bounds: String
+    val bounds: String,
+    val inputValue: String? = null,
+    val inputValueAvailable: Boolean = false,
+    val sensitive: Boolean = false
 )
 
 /**
@@ -105,6 +108,15 @@ class BrowserPerceptionLayer {
                 else -> el.tag
             }
             val idBase = if (el.id.isNotBlank()) el.id else "${role}_${el.index}"
+            val isSensitive = el.type.equals("password", ignoreCase = true) ||
+                    el.name.contains("password", ignoreCase = true) ||
+                    el.name.contains("otp", ignoreCase = true) ||
+                    el.placeholder.contains("password", ignoreCase = true) ||
+                    el.placeholder.contains("otp", ignoreCase = true) ||
+                    el.placeholder.contains("cvv", ignoreCase = true) ||
+                    el.ariaLabel.contains("password", ignoreCase = true) ||
+                    el.ariaLabel.contains("otp", ignoreCase = true)
+
             SemanticElement(
                 semanticId = idBase,
                 originalIndex = el.index,
@@ -116,8 +128,11 @@ class BrowserPerceptionLayer {
                 href = el.href,
                 isClickable = el.isClickable,
                 isInput = el.isInput,
-                value = el.value,
-                bounds = el.bounds
+                value = if (isSensitive) "" else el.value,
+                bounds = el.bounds,
+                inputValue = if (isSensitive) null else (if (el.isInput) el.value else null),
+                inputValueAvailable = !isSensitive && el.isInput,
+                sensitive = isSensitive
             )
         }
 

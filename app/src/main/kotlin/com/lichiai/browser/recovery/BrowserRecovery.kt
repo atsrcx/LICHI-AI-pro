@@ -4,7 +4,8 @@ import com.lichiai.browser.api.BrowserCapabilityAPI
 import com.lichiai.browser.context.BrowserTaskContext
 import com.lichiai.browser.events.BrowserEvent
 import com.lichiai.browser.events.BrowserEventBus
-import kotlinx.coroutines.delay
+import com.lichiai.browser.runtime.BrowserConditionWaiter
+import com.lichiai.browser.verifier.BrowserVerifier
 
 data class RecoveryAttemptResult(
     val recovered: Boolean,
@@ -12,8 +13,8 @@ data class RecoveryAttemptResult(
 )
 
 /**
- * Isolated recovery engine for Browser Agent.
- * Handles transient network dropouts, unclickable DOM candidates, and timeouts.
+ * Authoritative Isolated recovery engine for Browser Agent.
+ * Handles transient network dropouts, unclickable DOM candidates, and timeouts with condition-based waiters.
  */
 class BrowserRecovery(
     private val capabilityApi: BrowserCapabilityAPI,
@@ -34,15 +35,14 @@ class BrowserRecovery(
 
         return when (failedAction) {
             "navigate" -> {
-                delay(1000)
                 val url = arguments["url"] ?: return RecoveryAttemptResult(false, "No URL to reload")
                 val ok = capabilityApi.navigate(url)
                 if (ok) {
-                    delay(1500)
+                    BrowserConditionWaiter.waitForUrlChange(context.currentUrl) { (capabilityApi as? com.lichiai.browser.BrowserController)?.activeEngine?.value }
                     val ctx = capabilityApi.getPageContext()
-                    val verified = com.lichiai.browser.verifier.BrowserVerifier.verifyNavigation(url, ctx)
+                    val verified = BrowserVerifier.verifyNavigation(url, ctx)
                     if (verified.passed) {
-                        RecoveryAttemptResult(true, "Recovered by reloading URL")
+                        RecoveryAttemptResult(true, "Recovered by reloading URL: $url")
                     } else {
                         RecoveryAttemptResult(false, "Reload navigation unconfirmed: ${verified.detail}")
                     }
@@ -52,13 +52,12 @@ class BrowserRecovery(
             }
 
             "search" -> {
-                delay(800)
                 val q = arguments["query"] ?: return RecoveryAttemptResult(false, "No query")
                 val ok = capabilityApi.search(q, "duckduckgo")
                 if (ok) {
-                    delay(1500)
+                    BrowserConditionWaiter.waitForUrlChange(context.currentUrl) { (capabilityApi as? com.lichiai.browser.BrowserController)?.activeEngine?.value }
                     val ctx = capabilityApi.getPageContext()
-                    val verified = com.lichiai.browser.verifier.BrowserVerifier.verifySearchResults(q, ctx)
+                    val verified = BrowserVerifier.verifySearchResults(q, ctx)
                     if (verified.passed) {
                         RecoveryAttemptResult(true, "Recovered using alternate search engine (DuckDuckGo)")
                     } else {
@@ -69,36 +68,35 @@ class BrowserRecovery(
                 }
             }
 
-            "clickCandidate" -> {
-                delay(500)
+            "clickCandidate", "clickElement" -> {
                 val idx = arguments["index"]?.toIntOrNull() ?: 1
                 val candidate = context.extractedCandidates.firstOrNull { it.index == idx }
                 if (candidate != null && candidate.title.isNotBlank()) {
                     val ok = capabilityApi.clickSelector(candidate.title.take(30))
                     if (ok) {
-                        delay(1200)
+                        BrowserConditionWaiter.waitForDomStable { (capabilityApi as? com.lichiai.browser.BrowserController)?.activeEngine?.value }
                         val ctx = capabilityApi.getPageContext()
-                        val verified = com.lichiai.browser.verifier.BrowserVerifier.verifyClick(context.currentUrl, ctx)
+                        val verified = BrowserVerifier.verifyClick(context.currentUrl, ctx, candidate.title)
                         if (verified.passed) {
-                            RecoveryAttemptResult(true, "Recovered by clicking candidate text")
+                            RecoveryAttemptResult(true, "Recovered by clicking candidate text: '${candidate.title}'")
                         } else {
-                            RecoveryAttemptResult(false, "Candidate click unverified")
+                            RecoveryAttemptResult(false, "Candidate click unverified: ${verified.detail}")
                         }
                     } else {
                         RecoveryAttemptResult(false, "Candidate text click failed")
                     }
                 } else {
                     capabilityApi.reload()
-                    delay(1200)
+                    BrowserConditionWaiter.waitForPageReady { (capabilityApi as? com.lichiai.browser.BrowserController)?.activeEngine?.value }
                     val ok = capabilityApi.clickCandidate(idx)
                     if (ok) {
-                        delay(1200)
+                        BrowserConditionWaiter.waitForDomStable { (capabilityApi as? com.lichiai.browser.BrowserController)?.activeEngine?.value }
                         val ctx = capabilityApi.getPageContext()
-                        val verified = com.lichiai.browser.verifier.BrowserVerifier.verifyClick(context.currentUrl, ctx)
+                        val verified = BrowserVerifier.verifyClick(context.currentUrl, ctx)
                         if (verified.passed) {
                             RecoveryAttemptResult(true, "Recovered after page reload")
                         } else {
-                            RecoveryAttemptResult(false, "Retry after reload unconfirmed")
+                            RecoveryAttemptResult(false, "Retry after reload unconfirmed: ${verified.detail}")
                         }
                     } else {
                         RecoveryAttemptResult(false, "Retry failed")
@@ -107,7 +105,6 @@ class BrowserRecovery(
             }
 
             else -> {
-                delay(500)
                 RecoveryAttemptResult(false, "No deterministic recovery strategy available for '$failedAction'")
             }
         }

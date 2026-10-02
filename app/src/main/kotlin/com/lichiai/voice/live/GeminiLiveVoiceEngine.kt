@@ -63,7 +63,9 @@ class GeminiLiveVoiceEngine(
         private const val LIVE_WS_HOST = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
         private const val SAMPLE_RATE_IN = 16000
         private const val SAMPLE_RATE_OUT = 24000
-        private const val BARGE_IN_RMS_THRESHOLD = 1.8f
+        private const val INPUT_CHUNK_BYTES = 640 // 20ms @ 16kHz, PCM16 mono
+        private const val LIVE_VAD_PREFIX_PADDING_MS = 20
+        private const val LIVE_VAD_SILENCE_DURATION_MS = 100
         private const val MAX_RECONNECT_ATTEMPTS = 3
     }
 
@@ -104,23 +106,25 @@ class GeminiLiveVoiceEngine(
     private var currentTurnUserSpeech = ""
 
     private var activeApiKey: String = ""
-    private var activeModel: String = "gemini-2.5-flash-native-audio-preview-12-2025"
+    private var activeModel: String = "gemini-3.8-live"
     private var activeVoice: String = "Puck"
     private var activeSystemPrompt: String = ""
     private var sessionStartTimeMs: Long = 0L
 
     fun startSession(
         apiKey: String,
-        model: String = "gemini-2.5-flash-native-audio-preview-12-2025",
+        model: String = "gemini-3.8-live",
         voiceName: String = "Puck",
-        systemInstruction: String = ""
+        systemInstruction: String = "",
+        bargeInEnabled: Boolean = true,
+        safeEchoProtection: Boolean = true
     ) {
         if (isSessionActive.get()) {
             stopSession()
         }
 
         activeApiKey = apiKey
-        activeModel = model.ifBlank { "gemini-2.5-flash-native-audio-preview-12-2025" }
+        activeModel = model.ifBlank { "gemini-3.8-live" }
         activeVoice = voiceName.ifBlank { "Puck" }
         activeSystemPrompt = systemInstruction
 
@@ -313,6 +317,18 @@ class GeminiLiveVoiceEngine(
                     }
                     put("generationConfig", genConfig)
 
+                    // Keep Gemini's native automatic VAD enabled. Do not add a client-side
+                    // RMS gate: AudioRecord audio must continuously reach Gemini so the
+                    // server can detect quiet speech and barge-in without waiting for a
+                    // local threshold to be crossed.
+                    put("realtimeInputConfig", JSONObject().apply {
+                        put("automaticActivityDetection", JSONObject().apply {
+                            put("disabled", false)
+                            put("prefixPaddingMs", LIVE_VAD_PREFIX_PADDING_MS)
+                            put("silenceDurationMs", LIVE_VAD_SILENCE_DURATION_MS)
+                        })
+                    })
+
                     if (activeSystemPrompt.isNotBlank()) {
                         val sysInstruction = JSONObject().apply {
                             put("parts", JSONArray().apply {
@@ -455,6 +471,7 @@ class GeminiLiveVoiceEngine(
                 val readyTime = if (sessionStartTimeMs > 0) System.currentTimeMillis() - sessionStartTimeMs else 0
                 Log.d(TAG, "[LIVE-DIAG] Setup acknowledged in ${readyTime}ms! Session READY.")
                 setupAcknowledged.set(true)
+                reconnectAttempts.set(0)
                 setupTimeoutJob?.cancel()
                 setupTimeoutJob = null
 
@@ -480,7 +497,7 @@ class GeminiLiveVoiceEngine(
                 if (vaType == "ACTIVITY_START") {
                     // Barge-in detected by server VAD: user began speaking
                     if (isPlaying.get() || audioPlaybackQueue.isNotEmpty()) {
-                        Log.d(TAG, "[LIVE-DIAG] Native Barge-in: user spoke, flushing playback queue")
+                        Log.d(TAG, "[LIVE-DIAG] Native Barge-in: Gemini VAD detected speech; flushing playback queue")
                         handleInterruption()
                     }
                     coroutineScope.launch(Dispatchers.Main) {
@@ -778,7 +795,7 @@ class GeminiLiveVoiceEngine(
             playbackJob = coroutineScope.launch(Dispatchers.IO) {
                 var firstPlayLogged = false
                 while (isActive && isSessionActive.get()) {
-                    val chunk = audioPlaybackQueue.poll(80, TimeUnit.MILLISECONDS)
+                    val chunk = audioPlaybackQueue.poll(25, TimeUnit.MILLISECONDS)
                     if (chunk == null) {
                         if (isPlaying.getAndSet(false)) {
                             // Queue drained, no longer actively speaking
@@ -890,59 +907,58 @@ class GeminiLiveVoiceEngine(
 
             recordingJob?.cancel()
             recordingJob = coroutineScope.launch(Dispatchers.IO) {
-                // 1600 bytes = 800 samples = 50ms at 16kHz 16-bit mono
-                val buffer = ByteArray(1600)
+                // 640 bytes = 320 samples = 20ms at 16kHz 16-bit mono.
+                // Small chunks reduce capture-to-server latency while staying inside
+                // Gemini Live's recommended real-time audio chunk range.
+                val buffer = ByteArray(INPUT_CHUNK_BYTES)
                 var totalChunksSent = 0
 
                 while (isActive && isRecording.get()) {
                     val currentRec = audioRecord ?: break
                     val bytesRead = currentRec.read(buffer, 0, buffer.size)
-                    if (bytesRead > 0) {
-                        val rms = computePcmRms(buffer, bytesRead)
-                        val state = getState()
+                    if (bytesRead <= 0) continue
 
-                        if (state.state != VoiceState.SPEAKING) {
-                            withContext(Dispatchers.Main) {
-                                updateState { it.copy(currentRms = rms) }
-                                if (state.state == VoiceState.LISTENING) {
-                                    LichiAssistantStateHub.onVoiceListening(
-                                        partialTranscript = currentTurnUserSpeech,
-                                        rms = rms
-                                    )
-                                }
+                    val rms = computePcmRms(buffer, bytesRead)
+                    val state = getState()
+
+                    if (state.state != VoiceState.SPEAKING) {
+                        withContext(Dispatchers.Main) {
+                            updateState { it.copy(currentRms = rms) }
+                            if (state.state == VoiceState.LISTENING) {
+                                LichiAssistantStateHub.onVoiceListening(
+                                    partialTranscript = currentTurnUserSpeech,
+                                    rms = rms
+                                )
                             }
                         }
+                    }
 
-                        // Echo Protection & Barge-in Filter:
-                        // When Gemini is speaking (isPlaying.get() is true):
-                        // We suppress speaker acoustic leakage from triggering Gemini's VAD.
-                        // However, if user speaks up to barge-in (RMS >= BARGE_IN_RMS_THRESHOLD),
-                        // the audio chunk is forwarded so the server VAD interrupts Gemini.
-                        val shouldForwardAudio = when {
-                            state.isMicMuted -> false
-                            !setupAcknowledged.get() -> false
-                            webSocket == null -> false
-                            !isPlaying.get() -> true // Model silent -> stream all speech freely
-                            else -> rms >= BARGE_IN_RMS_THRESHOLD // Model speaking -> forward only user barge-in voice
-                        }
+                    // IMPORTANT: Never gate realtime audio by local RMS or by isPlaying.
+                    // Gemini's automatic VAD must receive the continuous microphone stream.
+                    // Hardware AEC/NS/AGC reduce speaker leakage before the server sees it,
+                    // while Gemini's server-side VAD decides whether the user is speaking.
+                    // This preserves quiet speech, word onsets, and natural barge-in.
+                    if (state.isMicMuted || !setupAcknowledged.get()) continue
 
-                        if (shouldForwardAudio) {
-                            val base64Data = Base64.encodeToString(buffer, 0, bytesRead, Base64.NO_WRAP)
-                            val realtimeInputPayload = JSONObject().apply {
-                                put("realtimeInput", JSONObject().apply {
-                                    put("mediaChunks", JSONArray().apply {
-                                        put(JSONObject().apply {
-                                            put("mimeType", "audio/pcm;rate=16000")
-                                            put("data", base64Data)
-                                        })
-                                    })
-                                })
-                            }
-                            webSocket?.send(realtimeInputPayload.toString())
-                            totalChunksSent++
-                            if (totalChunksSent == 1 || totalChunksSent % 100 == 0) {
-                                Log.d(TAG, "[LIVE-DIAG] RealtimeInput streaming: chunksSent=$totalChunksSent, RMS=$rms, isPlaying=${isPlaying.get()}")
-                            }
+                    val ws = webSocket ?: continue
+                    val base64Data = Base64.encodeToString(buffer, 0, bytesRead, Base64.NO_WRAP)
+                    val realtimeInputPayload = JSONObject().apply {
+                        put("realtimeInput", JSONObject().apply {
+                            put("audio", JSONObject().apply {
+                                put("mimeType", "audio/pcm;rate=16000")
+                                put("data", base64Data)
+                            })
+                        })
+                    }
+
+                    if (ws.send(realtimeInputPayload.toString())) {
+                        totalChunksSent++
+                        if (totalChunksSent == 1 || totalChunksSent % 250 == 0) {
+                            Log.d(
+                                TAG,
+                                "[LIVE-DIAG] RealtimeInput streaming: chunksSent=$totalChunksSent, " +
+                                    "rms=$rms, assistantPlaying=${isPlaying.get()}"
+                            )
                         }
                     }
                 }

@@ -240,12 +240,12 @@ class BrowserAgentRuntime(
                 )
             }
 
-            // Handle Goal Stop with explicit verification check
+            // Handle Goal Stop with explicit verification check (Phase 11 & 24)
             if (decision.action == "STOP") {
                 val goalVerification = verifyGoal(intent, preSnapshot)
-                val isVerified = goalVerification.status == GoalVerificationStatus.VERIFIED || goalVerification.status == GoalVerificationStatus.PARTIALLY_VERIFIED
+                val isVerified = goalVerification.status == GoalVerificationStatus.VERIFIED
                 val msg = decision.summary.ifBlank {
-                    if (isVerified) "Opened and verified '${preSnapshot.title.ifBlank { preSnapshot.url }}'." else "Browser stopped on '${preSnapshot.title.ifBlank { preSnapshot.url }}'."
+                    if (isVerified) "Opened and verified '${preSnapshot.title.ifBlank { preSnapshot.url }}'." else "Browser stopped on '${preSnapshot.title.ifBlank { preSnapshot.url }}' (Goal unverified)."
                 }
                 actionLog.completeAction("step_$currentStepNum", msg)
                 eventBus.emit(BrowserEvent.TaskCompleted(taskId, msg))
@@ -278,7 +278,7 @@ class BrowserAgentRuntime(
                 )
             }
 
-            // STEP 4: ACTION LOOP GUARD (Phase 16)
+            // STEP 4: ACTION LOOP GUARD (Phase 16 & 28)
             val signature = "${decision.action}_${typedAction}_${preSnapshot.url}"
             val duplicateCount = actionSignatures.count { it == signature }
             if (duplicateCount >= 2) {
@@ -286,7 +286,7 @@ class BrowserAgentRuntime(
                 if (recoveryCount < MAX_RECOVERY_ATTEMPTS) {
                     recoveryCount++
                     actionLog.startAction("step_${currentStepNum}_recovery", "Loop detected: attempting page scroll/recovery...")
-                    actionEngine.executeAction(TypedBrowserAction.Scroll(ScrollDirection.DOWN, 1))
+                    actionEngine.executeAction(TypedBrowserAction.Scroll(ScrollDirection.DOWN, 1, generationId = preSnapshot.generationId))
                     BrowserConditionWaiter.waitForDomStable(getEngine = { browserController.activeEngine.value })
                     continue
                 } else {
@@ -407,10 +407,14 @@ class BrowserAgentRuntime(
     /**
      * Explicit goal verification returning structured GoalVerificationResult (Phase 14).
      */
+    /**
+     * Explicit goal verification returning structured GoalVerificationResult (Phase 11).
+     * No generic PAGE_LOADED success fallback.
+     */
     fun verifyGoal(intent: BrowserTaskIntent, snapshot: PagePerceptionSnapshot): GoalVerificationResult {
         val currentUrl = snapshot.url
         val currentTitle = snapshot.title
-        val lowerGoal = intent.goal.lowercase()
+        val lowerGoal = intent.goal.lowercase(java.util.Locale.ROOT)
 
         if (currentUrl.isBlank() || currentUrl == "about:blank") {
             return GoalVerificationResult(
@@ -423,7 +427,155 @@ class BrowserAgentRuntime(
             )
         }
 
-        // 1. Specific domain or website goal verification (e.g. PUBG, YouTube, Amazon)
+        // 1. NAVIGATE / OPEN task type
+        if (intent.taskType == BrowserTaskType.NAVIGATE) {
+            val expectedTarget = intent.expectedOutcome ?: intent.goal
+            val expectedDomain = BrowserVerifier.extractDomain(expectedTarget).lowercase(java.util.Locale.ROOT).removePrefix("www.")
+            val currentDomain = BrowserVerifier.extractDomain(currentUrl).lowercase(java.util.Locale.ROOT).removePrefix("www.")
+
+            if (expectedDomain.isNotBlank() && (currentDomain == expectedDomain || currentDomain.contains(expectedDomain))) {
+                return GoalVerificationResult(
+                    status = GoalVerificationStatus.VERIFIED,
+                    expectedState = "Domain $expectedDomain",
+                    observedState = currentUrl,
+                    verificationEvidence = "Reached target domain $expectedDomain ('$currentTitle')",
+                    confidence = 0.95f,
+                    reasonCode = "DOMAIN_MATCHED"
+                )
+            } else if (expectedDomain.isNotBlank()) {
+                return GoalVerificationResult(
+                    status = GoalVerificationStatus.NOT_VERIFIED,
+                    expectedState = "Domain $expectedDomain",
+                    observedState = currentUrl,
+                    verificationEvidence = "Current domain '$currentDomain' does not match expected '$expectedDomain'",
+                    confidence = 0.2f,
+                    reasonCode = "DOMAIN_MISMATCH"
+                )
+            }
+        }
+
+        // 2. SEARCH task type
+        if (intent.taskType == BrowserTaskType.SEARCH) {
+            val isSearchPage = BrowserVerifier.isSearchResultsPage(currentUrl)
+            if (isSearchPage) {
+                return GoalVerificationResult(
+                    status = GoalVerificationStatus.VERIFIED,
+                    expectedState = "Search results for \"${intent.goal}\"",
+                    observedState = currentUrl,
+                    verificationEvidence = "Search results page confirmed with ${snapshot.candidateLinks.size} candidates",
+                    confidence = 0.9f,
+                    reasonCode = "SEARCH_COMPLETED"
+                )
+            } else {
+                return GoalVerificationResult(
+                    status = GoalVerificationStatus.NOT_VERIFIED,
+                    expectedState = "Search results page",
+                    observedState = currentUrl,
+                    verificationEvidence = "Active URL '$currentUrl' is not a confirmed search engine results page",
+                    confidence = 0.3f,
+                    reasonCode = "SEARCH_UNCONFIRMED"
+                )
+            }
+        }
+
+        // 3. SEARCH_AND_OPEN task type
+        if (intent.taskType == BrowserTaskType.SEARCH_AND_OPEN) {
+            val isSearchPage = BrowserVerifier.isSearchResultsPage(currentUrl)
+            if (isSearchPage) {
+                return GoalVerificationResult(
+                    status = GoalVerificationStatus.PARTIALLY_VERIFIED,
+                    expectedState = "Opened target website from search results",
+                    observedState = "Search results page: $currentUrl",
+                    verificationEvidence = "Still on search engine page; target website result has not been opened yet",
+                    confidence = 0.5f,
+                    reasonCode = "STILL_ON_SEARCH_PAGE"
+                )
+            } else if (snapshot.loadingState.isLoaded && currentUrl != "about:blank") {
+                return GoalVerificationResult(
+                    status = GoalVerificationStatus.VERIFIED,
+                    expectedState = "Opened target website",
+                    observedState = currentUrl,
+                    verificationEvidence = "Destination website loaded: '$currentTitle' ($currentUrl)",
+                    confidence = 0.9f,
+                    reasonCode = "DESTINATION_OPENED"
+                )
+            }
+        }
+
+        // 4. FORM_FILL task type
+        if (intent.taskType == BrowserTaskType.FILL_FORM) {
+            val hasInputs = snapshot.semanticElements.any { it.isInput && !it.inputValue.isNullOrBlank() }
+            return if (hasInputs) {
+                GoalVerificationResult(
+                    status = GoalVerificationStatus.VERIFIED,
+                    expectedState = "Form fields populated",
+                    observedState = currentUrl,
+                    verificationEvidence = "Form input fields verified with values",
+                    confidence = 0.9f,
+                    reasonCode = "FORM_POPULATED"
+                )
+            } else {
+                GoalVerificationResult(
+                    status = GoalVerificationStatus.NOT_VERIFIED,
+                    expectedState = "Populated form fields",
+                    observedState = currentUrl,
+                    verificationEvidence = "No populated input fields detected in current DOM",
+                    confidence = 0.3f,
+                    reasonCode = "FORM_EMPTY"
+                )
+            }
+        }
+
+        // 5. READ_PAGE / FIND_INFORMATION task types
+        if (intent.taskType == BrowserTaskType.READ_PAGE || intent.taskType == BrowserTaskType.FIND_INFORMATION) {
+            val hasText = snapshot.visibleTextSnippet.isNotBlank()
+            return if (hasText) {
+                GoalVerificationResult(
+                    status = GoalVerificationStatus.VERIFIED,
+                    expectedState = "Extracted content",
+                    observedState = "${snapshot.visibleTextSnippet.length} chars available",
+                    verificationEvidence = "Content successfully extracted from '$currentTitle'",
+                    confidence = 0.9f,
+                    reasonCode = "CONTENT_AVAILABLE"
+                )
+            } else {
+                GoalVerificationResult(
+                    status = GoalVerificationStatus.NOT_VERIFIED,
+                    expectedState = "Extracted content",
+                    observedState = "Empty page content",
+                    verificationEvidence = "No text content available to extract",
+                    confidence = 0.1f,
+                    reasonCode = "CONTENT_EMPTY"
+                )
+            }
+        }
+
+        // 6. DOWNLOAD task type
+        if (intent.taskType == BrowserTaskType.DOWNLOAD) {
+            val downloads = browserController.downloadManager.downloads.value
+            val downloadCheck = BrowserVerifier.verifyDownload(currentUrl, downloads)
+            return if (downloadCheck.passed) {
+                GoalVerificationResult(
+                    status = GoalVerificationStatus.VERIFIED,
+                    expectedState = "Completed file download",
+                    observedState = downloadCheck.detail,
+                    verificationEvidence = downloadCheck.detail,
+                    confidence = 0.95f,
+                    reasonCode = "DOWNLOAD_COMPLETED"
+                )
+            } else {
+                GoalVerificationResult(
+                    status = GoalVerificationStatus.NOT_VERIFIED,
+                    expectedState = "Completed file download",
+                    observedState = downloadCheck.detail,
+                    verificationEvidence = downloadCheck.detail,
+                    confidence = 0.4f,
+                    reasonCode = "DOWNLOAD_PENDING"
+                )
+            }
+        }
+
+        // 7. Fallback entity check
         val expectedDomain = when {
             lowerGoal.contains("pubg") -> "pubg.com"
             lowerGoal.contains("youtube") -> "youtube.com"
@@ -435,7 +587,7 @@ class BrowserAgentRuntime(
         }
 
         if (expectedDomain != null) {
-            val matchesDomain = currentUrl.lowercase().contains(expectedDomain)
+            val matchesDomain = currentUrl.lowercase(java.util.Locale.ROOT).contains(expectedDomain)
             val isSearchPage = BrowserVerifier.isSearchResultsPage(currentUrl)
 
             if (matchesDomain && !isSearchPage) {
@@ -459,27 +611,14 @@ class BrowserAgentRuntime(
             }
         }
 
-        // 2. Search query verification
-        if (intent.taskType == BrowserTaskType.SEARCH && BrowserVerifier.isSearchResultsPage(currentUrl)) {
-            return GoalVerificationResult(
-                status = GoalVerificationStatus.VERIFIED,
-                expectedState = "Search results page for \"${intent.goal}\"",
-                observedState = currentUrl,
-                verificationEvidence = "Search results page loaded with candidates",
-                confidence = 0.9f,
-                reasonCode = "SEARCH_COMPLETED"
-            )
-        }
-
-        // 3. General non-blank loaded page
-        val isLoaded = snapshot.loadingState.isLoaded
+        // Unknown / unverified fallback
         return GoalVerificationResult(
-            status = if (isLoaded) GoalVerificationStatus.VERIFIED else GoalVerificationStatus.PARTIALLY_VERIFIED,
-            expectedState = "Loaded page",
+            status = GoalVerificationStatus.NOT_VERIFIED,
+            expectedState = "Verified goal state for \"${intent.goal}\"",
             observedState = "$currentUrl ('$currentTitle')",
-            verificationEvidence = "Page loaded successfully",
-            confidence = 0.8f,
-            reasonCode = "PAGE_LOADED"
+            verificationEvidence = "Real-world state condition for task type '${intent.taskType}' could not be proven.",
+            confidence = 0.3f,
+            reasonCode = "UNVERIFIED_GOAL"
         )
     }
 
@@ -545,25 +684,27 @@ class BrowserAgentRuntime(
         post: PagePerceptionSnapshot,
         result: BrowserActionResult
     ): Boolean {
-        if (!result.isSuccess) return false
+        if (!result.isSuccess || result.status != ActionExecutionStatus.SUCCESS) return false
         return when (action) {
             is TypedBrowserAction.OpenURL -> {
                 post.url.isNotBlank() && post.url != "about:blank"
             }
-            is TypedBrowserAction.Back -> {
+            is TypedBrowserAction.Back, is TypedBrowserAction.Forward -> {
                 post.url != pre.url || post.title != pre.title
             }
             is TypedBrowserAction.Reload -> {
-                post.url.isNotBlank()
+                post.generationId != pre.generationId && post.url.isNotBlank()
             }
             is TypedBrowserAction.TapElement -> {
-                post.url != pre.url || post.title != pre.title || post.generationId != pre.generationId
+                post.url != pre.url || post.title != pre.title || post.generationId != pre.generationId || post.loadingState.scrollY != pre.loadingState.scrollY
             }
             is TypedBrowserAction.TypeText -> {
-                result.isSuccess
+                result.status == ActionExecutionStatus.SUCCESS && result.isSuccess
             }
-            is TypedBrowserAction.Scroll -> true
-            else -> result.isSuccess
+            is TypedBrowserAction.Scroll -> {
+                result.status == ActionExecutionStatus.SUCCESS && result.isSuccess
+            }
+            else -> result.isSuccess && result.status == ActionExecutionStatus.SUCCESS
         }
     }
 
@@ -571,18 +712,19 @@ class BrowserAgentRuntime(
         failedAction: TypedBrowserAction,
         postSnapshot: PagePerceptionSnapshot
     ): TypedBrowserAction? {
+        val genId = postSnapshot.generationId
         return when (failedAction) {
             is TypedBrowserAction.TapElement -> {
                 // If candidate links exist, try opening the first one
                 val candidate = postSnapshot.candidateLinks.firstOrNull()
                 if (candidate != null && candidate.url.isNotBlank()) {
-                    TypedBrowserAction.OpenURL(candidate.url)
+                    TypedBrowserAction.OpenURL(candidate.url, generationId = genId)
                 } else {
-                    TypedBrowserAction.Scroll(ScrollDirection.DOWN, 1)
+                    TypedBrowserAction.Scroll(ScrollDirection.DOWN, 1, generationId = genId)
                 }
             }
             is TypedBrowserAction.OpenURL -> {
-                TypedBrowserAction.Reload()
+                TypedBrowserAction.Reload(generationId = genId)
             }
             else -> null
         }

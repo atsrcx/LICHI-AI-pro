@@ -337,6 +337,32 @@ class InMemoryMemoryItemDao : MemoryItemDao {
     override suspend fun getActiveByCategory(category: String): List<MemoryItemEntity> =
         items.filter { it.category == category && it.status == "ACTIVE" }
 
+    override suspend fun getActiveByKeyForUser(key: String, userId: String, limit: Int): List<MemoryItemEntity> =
+        items.filter { it.key == key && it.userId == userId && it.status == "ACTIVE" }.sortedByDescending { it.observedAt }.take(limit)
+
+    override suspend fun getHistoricalByKeyForUser(key: String, userId: String, limit: Int): List<MemoryItemEntity> =
+        items.filter { it.key == key && it.userId == userId && it.status == "SUPERSEDED" }.sortedByDescending { it.observedAt }.take(limit)
+
+    override suspend fun getActiveByCategoryForUser(category: String, userId: String, limit: Int): List<MemoryItemEntity> =
+        items.filter { it.category == category && it.userId == userId && it.status == "ACTIVE" }.sortedByDescending { it.salience }.take(limit)
+
+    override suspend fun searchActiveFtsForUser(searchQuery: String, userId: String, limit: Int): List<MemoryItemEntity> {
+        val queryTokens = searchQuery.split(Regex("""[\s*]+""")).filter { it.isNotBlank() }
+        return items.filter { it.status == "ACTIVE" && it.userId == userId && (queryTokens.any { t -> it.key.contains(t, true) || it.value.contains(t, true) }) }.take(limit)
+    }
+
+    override suspend fun getActiveProfileItems(userId: String): List<MemoryItemEntity> =
+        items.filter { it.userId == userId && it.status == "ACTIVE" }
+
+    override suspend fun getByIds(ids: List<String>): List<MemoryItemEntity> =
+        items.filter { it.id in ids }
+
+    override suspend fun getByIdsForUser(ids: List<String>, userId: String): List<MemoryItemEntity> =
+        items.filter { it.id in ids && it.userId == userId && it.status == "ACTIVE" }
+
+    override suspend fun getActiveByDedupeKeyForUser(dedupeKey: String, userId: String): List<MemoryItemEntity> =
+        items.filter { it.dedupeKey == dedupeKey && it.userId == userId && it.status == "ACTIVE" }
+
     override suspend fun searchItems(query: String, limit: Int): List<MemoryItemEntity> =
         items.filter { it.status == "ACTIVE" && (it.key.contains(query, true) || it.value.contains(query, true)) }.take(limit)
 
@@ -358,8 +384,18 @@ class InMemoryMemoryItemDao : MemoryItemDao {
     override suspend fun getAllHistoricalItems(): List<MemoryItemEntity> =
         items.filter { it.status == "SUPERSEDED" }.sortedByDescending { it.observedAt }
 
+    override suspend fun getHistoricalItemsForUser(userId: String): List<MemoryItemEntity> =
+        items.filter { it.userId == userId && it.status == "SUPERSEDED" }.sortedByDescending { it.observedAt }
+
     override suspend fun supersedeActiveKey(key: String, supersededAt: Long) {
         val targets = items.filter { it.key == key && it.status == "ACTIVE" }
+        targets.forEach { t ->
+            upsert(t.copy(status = "SUPERSEDED", validUntil = supersededAt))
+        }
+    }
+
+    override suspend fun supersedeActiveKeyForUser(key: String, userId: String, supersededAt: Long) {
+        val targets = items.filter { it.key == key && it.userId == userId && it.status == "ACTIVE" }
         targets.forEach { t ->
             upsert(t.copy(status = "SUPERSEDED", validUntil = supersededAt))
         }
@@ -371,10 +407,35 @@ class InMemoryMemoryItemDao : MemoryItemDao {
             upsert(t.copy(status = "TOMBSTONE"))
         }
     }
+
+    override suspend fun markTombstoneByKeyForUser(key: String, userId: String) {
+        val targets = items.filter { (it.key.contains(key, true) || it.value.contains(key, true)) && it.userId == userId }
+        targets.forEach { t ->
+            upsert(t.copy(status = "TOMBSTONE"))
+        }
+    }
+
+    override suspend fun deleteByConversationId(conversationId: String) {
+        items.removeAll { it.conversationId == conversationId }
+    }
+
+    override suspend fun deleteBySourceMessageId(messageId: String) {
+        items.removeAll { it.sourceMessageId == messageId }
+    }
+
+    override suspend fun getBySourceMessageId(messageId: String): List<MemoryItemEntity> =
+        items.filter { it.sourceMessageId == messageId }
+
+    override suspend fun getByConversationId(conversationId: String): List<MemoryItemEntity> =
+        items.filter { it.conversationId == conversationId }
 }
 
 class InMemoryEntityRecordDao : EntityRecordDao {
     val entities = mutableListOf<EntityRecordEntity>()
+
+    override suspend fun deleteByConversationId(conversationId: String) {
+        entities.removeAll { it.conversationId == conversationId }
+    }
 
     override suspend fun upsert(entity: EntityRecordEntity) {
         entities.removeAll { it.entityId == entity.entityId }
@@ -397,11 +458,23 @@ class InMemoryEntityRecordDao : EntityRecordDao {
     override suspend fun getActiveEntities(): List<EntityRecordEntity> =
         entities.filter { it.status == "ACTIVE" }.sortedByDescending { it.salience }
 
+    override suspend fun getActiveEntitiesForUser(userId: String): List<EntityRecordEntity> =
+        entities.filter { it.userId == userId && it.status == "ACTIVE" }.sortedByDescending { it.salience }
+
     override suspend fun searchEntities(query: String, limit: Int): List<EntityRecordEntity> =
         entities.filter { it.status == "ACTIVE" && (it.canonicalName.contains(query, true) || it.aliasesJson.contains(query, true)) }.take(limit)
 
+    override suspend fun searchEntitiesForUser(query: String, userId: String, limit: Int): List<EntityRecordEntity> =
+        entities.filter { it.status == "ACTIVE" && it.userId == userId && (it.canonicalName.contains(query, true) || it.aliasesJson.contains(query, true)) }.take(limit)
+
+    override suspend fun getByIds(ids: List<String>): List<EntityRecordEntity> =
+        entities.filter { it.entityId in ids && it.status == "ACTIVE" }
+
     override suspend fun findByCanonicalName(canonicalName: String): EntityRecordEntity? =
         entities.firstOrNull { it.canonicalName.equals(canonicalName, true) && it.status == "ACTIVE" }
+
+    override suspend fun findByCanonicalNameForUser(canonicalName: String, userId: String): EntityRecordEntity? =
+        entities.firstOrNull { it.canonicalName.equals(canonicalName, true) && it.userId == userId && it.status == "ACTIVE" }
 
     override suspend fun updateStatus(entityId: String, newStatus: String) {
         entities.firstOrNull { it.entityId == entityId }?.let {
@@ -415,8 +488,17 @@ class InMemoryEntityRecordDao : EntityRecordDao {
         }
     }
 
+    override suspend fun markTombstoneByNameForUser(targetName: String, userId: String) {
+        entities.filter { (it.canonicalName.contains(targetName, true) || it.aliasesJson.contains(targetName, true)) && it.userId == userId }.forEach {
+            upsert(it.copy(status = "TOMBSTONE"))
+        }
+    }
+
     override suspend fun getByType(type: String): List<EntityRecordEntity> =
         entities.filter { it.entityType == type && it.status == "ACTIVE" }
+
+    override suspend fun getByTypeForUser(type: String, userId: String): List<EntityRecordEntity> =
+        entities.filter { it.entityType == type && it.userId == userId && it.status == "ACTIVE" }
 }
 
 class InMemoryEntityRelationDao : EntityRelationDao {
@@ -434,8 +516,14 @@ class InMemoryEntityRelationDao : EntityRelationDao {
     override suspend fun getRelationsForEntity(entityId: String): List<EntityRelationEntity> =
         relations.filter { (it.sourceEntityId == entityId || it.targetEntityId == entityId) && it.status == "ACTIVE" }
 
+    override suspend fun getRelationsForEntity(entityId: String, userId: String): List<EntityRelationEntity> =
+        relations.filter { (it.sourceEntityId == entityId || it.targetEntityId == entityId) && it.userId == userId && it.status == "ACTIVE" }
+
     override suspend fun getAllActiveRelations(): List<EntityRelationEntity> =
         relations.filter { it.status == "ACTIVE" }
+
+    override suspend fun getAllActiveRelationsForUser(userId: String): List<EntityRelationEntity> =
+        relations.filter { it.userId == userId && it.status == "ACTIVE" }
 
     override suspend fun updateStatus(relationId: String, newStatus: String) {
         relations.firstOrNull { it.relationId == relationId }?.let {
@@ -445,6 +533,12 @@ class InMemoryEntityRelationDao : EntityRelationDao {
 
     override suspend fun markTombstoneForEntity(entityId: String) {
         relations.filter { it.sourceEntityId == entityId || it.targetEntityId == entityId }.forEach {
+            upsert(it.copy(status = "TOMBSTONE"))
+        }
+    }
+
+    override suspend fun markTombstoneForEntity(entityId: String, userId: String) {
+        relations.filter { (it.sourceEntityId == entityId || it.targetEntityId == entityId) && it.userId == userId }.forEach {
             upsert(it.copy(status = "TOMBSTONE"))
         }
     }
@@ -468,8 +562,14 @@ class InMemoryRawLedgerDao : RawLedgerDao {
     override suspend fun getTurns(conversationId: String): List<ConversationRawLedgerEntity> =
         ledger.filter { it.conversationId == conversationId }
 
+    override suspend fun getTurnsForUser(conversationId: String, userId: String): List<ConversationRawLedgerEntity> =
+        ledger.filter { it.conversationId == conversationId && it.userId == userId }
+
     override suspend fun getRecentTurns(limit: Int): List<ConversationRawLedgerEntity> =
         ledger.sortedByDescending { it.timestamp }.take(limit)
+
+    override suspend fun getRecentTurnsForUser(userId: String, limit: Int): List<ConversationRawLedgerEntity> =
+        ledger.filter { it.userId == userId }.sortedByDescending { it.timestamp }.take(limit)
 
     override suspend fun searchFts(searchQuery: String, limit: Int): List<ConversationRawLedgerEntity> {
         val tokens = searchQuery.split(" OR ").map { it.trim().lowercase() }
@@ -478,13 +578,42 @@ class InMemoryRawLedgerDao : RawLedgerDao {
         }.take(limit)
     }
 
+    override suspend fun searchFtsForUser(searchQuery: String, userId: String, limit: Int): List<ConversationRawLedgerEntity> {
+        val tokens = searchQuery.split(" OR ").map { it.trim().lowercase() }
+        return ledger.filter { entry ->
+            entry.userId == userId && tokens.any { entry.verbatimContent.contains(it, true) }
+        }.take(limit)
+    }
+
     override suspend fun deleteConversation(conversationId: String) {
         ledger.removeAll { it.conversationId == conversationId }
+    }
+
+    override suspend fun deleteConversationForUser(conversationId: String, userId: String) {
+        ledger.removeAll { it.conversationId == conversationId && it.userId == userId }
+    }
+
+    override suspend fun getByMessageId(messageId: String): ConversationRawLedgerEntity? =
+        ledger.firstOrNull { it.messageId == messageId }
+
+    override suspend fun deleteByMessageId(messageId: String) {
+        ledger.removeAll { it.messageId == messageId }
+    }
+
+    override suspend fun updateMessageContent(messageId: String, newContent: String) {
+        val idx = ledger.indexOfFirst { it.messageId == messageId }
+        if (idx >= 0) {
+            ledger[idx] = ledger[idx].copy(verbatimContent = newContent)
+        }
     }
 }
 
 class InMemoryTombstoneDao : TombstoneDao {
     val tombstones = mutableListOf<TombstoneRecordEntity>()
+
+    override suspend fun deleteByScopeConversationId(conversationId: String) {
+        tombstones.removeAll { it.scopeConversationId == conversationId }
+    }
 
     override suspend fun insert(tombstone: TombstoneRecordEntity) {
         tombstones.removeAll { it.id == tombstone.id }
@@ -493,12 +622,22 @@ class InMemoryTombstoneDao : TombstoneDao {
 
     override suspend fun getAllTombstones(): List<TombstoneRecordEntity> = tombstones
 
+    override suspend fun getAllTombstonesForUser(userId: String): List<TombstoneRecordEntity> =
+        tombstones.filter { it.userId == userId }
+
     override fun getTombstonesFlow(): Flow<List<TombstoneRecordEntity>> = flowOf(tombstones)
 
     override suspend fun countTombstone(identifier: String): Int =
         tombstones.count { it.targetIdentifier.equals(identifier, true) }
 
+    override suspend fun countTombstoneForUser(identifier: String, userId: String): Int =
+        tombstones.count { it.targetIdentifier.equals(identifier, true) && it.userId == userId }
+
     override suspend fun deleteTombstone(identifier: String) {
         tombstones.removeAll { it.targetIdentifier.equals(identifier, true) }
+    }
+
+    override suspend fun deleteTombstoneForUser(identifier: String, userId: String) {
+        tombstones.removeAll { it.targetIdentifier.equals(identifier, true) && it.userId == userId }
     }
 }

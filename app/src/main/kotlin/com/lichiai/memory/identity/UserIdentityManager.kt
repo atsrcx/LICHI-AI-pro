@@ -21,6 +21,12 @@ object UserIdentityManager {
     @Volatile
     private var cachedUserId: String? = null
 
+    class UserIdentityInstance(private val context: Context) {
+        fun getCurrentUserId(): String = getStableUserId(context)
+    }
+
+    fun getInstance(context: Context): UserIdentityInstance = UserIdentityInstance(context)
+
     /**
      * Retrieves the stable persistent user ID, initializing once if necessary.
      */

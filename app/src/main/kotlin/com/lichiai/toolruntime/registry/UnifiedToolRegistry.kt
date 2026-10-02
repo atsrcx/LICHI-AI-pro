@@ -26,6 +26,7 @@ import com.lichiai.toolruntime.tools.CallContactTool
 import com.lichiai.toolruntime.tools.DeviceStateTool
 import com.lichiai.toolruntime.tools.DeviceVolumeTool
 import com.lichiai.toolruntime.tools.MediaPlayTool
+import com.lichiai.toolruntime.tools.MemoryForgetTool
 import com.lichiai.toolruntime.tools.MemorySearchTool
 import com.lichiai.toolruntime.tools.MemoryStoreTool
 import com.lichiai.toolruntime.tools.SkillListTool
@@ -120,6 +121,7 @@ class UnifiedToolRegistry(
         memoryEngine?.let {
             register(MemorySearchTool(it))
             register(MemoryStoreTool(it))
+            register(MemoryForgetTool(it))
         }
 
         // Skills & Media

@@ -183,7 +183,7 @@ class HumanLikeBrowserOperatingSystemTest {
     @Test
     fun testScrollAndFind_ScrollActionGeneration() {
         val intent = BrowserTaskIntent(goal = "Scroll down to see pricing", taskType = BrowserTaskType.SCROLL_AND_FIND)
-        val action = TypedBrowserAction.Scroll(ScrollDirection.DOWN, amount = 1)
+        val action = TypedBrowserAction.Scroll(ScrollDirection.DOWN, amount = 1, generationId = UUID.randomUUID().toString())
         assertEquals(ScrollDirection.DOWN, action.direction)
         assertEquals(1, action.amount)
     }
@@ -293,14 +293,14 @@ class HumanLikeBrowserOperatingSystemTest {
     // 18. Tab Switching
     @Test
     fun testTabSwitching_ActionModel() {
-        val tabAction = TypedBrowserAction.SwitchTab("tab-uuid-123")
+        val tabAction = TypedBrowserAction.SwitchTab("tab-uuid-123", generationId = UUID.randomUUID().toString())
         assertEquals("tab-uuid-123", tabAction.tabId)
     }
 
     // 19. Download Verification
     @Test
     fun testDownload_ActionModel() {
-        val dlAction = TypedBrowserAction.Download("https://example.com/app.apk", "app.apk")
+        val dlAction = TypedBrowserAction.Download("https://example.com/app.apk", "app.apk", generationId = UUID.randomUUID().toString())
         assertEquals("https://example.com/app.apk", dlAction.url)
         assertEquals("app.apk", dlAction.fileName)
     }
@@ -409,5 +409,95 @@ class HumanLikeBrowserOperatingSystemTest {
         val genId = UUID.randomUUID().toString()
         val otpInput = SemanticElement("otp_box", 0, genId, "input", "text", "Enter SMS OTP", "OTP Code", "", false, true, "", "")
         assertTrue(formEngine.isSensitiveField(otpInput))
+    }
+
+    // 29. TypeText - Exact Match vs Partial Mismatch
+    @Test
+    fun testTypeText_ExactMatchVsPartialMismatch() {
+        // Exact match passes
+        val exactRes = BrowserVerifier.verifyTypeText("hello world", "hello world")
+        assertTrue(exactRes.passed)
+
+        // Partial mismatch rejected (expected "hello world", actual "hello")
+        val partialRes = BrowserVerifier.verifyTypeText("hello world", "hello")
+        assertFalse(partialRes.passed)
+
+        // Wrong text rejected
+        val wrongRes = BrowserVerifier.verifyTypeText("hello world", "foobar")
+        assertFalse(wrongRes.passed)
+    }
+
+    // 30. Scroll - Movement and Boundary Verification
+    @Test
+    fun testScroll_MovementAndBoundaryVerification() {
+        // Down with movement passes
+        val moveDown = BrowserVerifier.verifyScroll(ScrollDirection.DOWN, preScrollY = 0, preMaxScrollY = 1000, postScrollY = 200, postMaxScrollY = 1000)
+        assertTrue(moveDown.passed)
+
+        // Down without movement when not at boundary fails
+        val noMove = BrowserVerifier.verifyScroll(ScrollDirection.DOWN, preScrollY = 200, preMaxScrollY = 1000, postScrollY = 200, postMaxScrollY = 1000)
+        assertFalse(noMove.passed)
+
+        // Down at bottom boundary passes
+        val boundary = BrowserVerifier.verifyScroll(ScrollDirection.DOWN, preScrollY = 1000, preMaxScrollY = 1000, postScrollY = 1000, postMaxScrollY = 1000)
+        assertTrue(boundary.passed)
+    }
+
+    // 31. Navigation - Path Mismatch Rejection
+    @Test
+    fun testNavigation_PathMismatchRejection() {
+        val context = BrowserTaskContext(
+            currentUrl = "https://example.com/products/999",
+            currentTitle = "Product 999"
+        )
+        // Requested specific path /products/123, actual is /products/999
+        val res = BrowserVerifier.verifyNavigation("https://example.com/products/123", context)
+        assertFalse(res.passed)
+    }
+
+    // 32. Download - State Lifecycle Verification
+    @Test
+    fun testDownload_StateLifecycleVerification() {
+        val downloads = listOf(
+            com.lichiai.browser.downloads.BrowserDownloadItem(
+                id = "dl-1",
+                fileName = "file.zip",
+                url = "https://example.com/file.zip",
+                mimeType = "application/zip",
+                contentLength = 1024L,
+                status = com.lichiai.browser.downloads.DownloadStatus.COMPLETED
+            )
+        )
+        val completed = BrowserVerifier.verifyDownload("https://example.com/file.zip", downloads)
+        assertTrue(completed.passed)
+
+        val inProgressDownloads = listOf(
+            com.lichiai.browser.downloads.BrowserDownloadItem(
+                id = "dl-2",
+                fileName = "file2.zip",
+                url = "https://example.com/file2.zip",
+                mimeType = "application/zip",
+                contentLength = 2048L,
+                status = com.lichiai.browser.downloads.DownloadStatus.DOWNLOADING
+            )
+        )
+        val inProgress = BrowserVerifier.verifyDownload("https://example.com/file2.zip", inProgressDownloads)
+        assertFalse(inProgress.passed)
+    }
+
+    // 33. Reload - Generation Freshness Verification
+    @Test
+    fun testReload_GenerationFreshness() {
+        val oldGen = UUID.randomUUID().toString()
+        val newGen = UUID.randomUUID().toString()
+        val ctx = BrowserTaskContext(
+            currentUrl = "https://example.com",
+            perceptionGenerationId = newGen
+        )
+        val reloadSuccess = BrowserVerifier.verifyReload(oldGen, ctx)
+        assertTrue(reloadSuccess.passed)
+
+        val reloadStale = BrowserVerifier.verifyReload(newGen, ctx)
+        assertFalse(reloadStale.passed)
     }
 }

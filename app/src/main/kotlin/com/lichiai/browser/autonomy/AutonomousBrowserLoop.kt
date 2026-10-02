@@ -172,32 +172,91 @@ class AutonomousBrowserLoop(
         post: PagePerceptionSnapshot,
         result: BrowserActionResult
     ): Boolean {
-        if (!result.isSuccess) return false
+        if (!result.isSuccess || result.status != ActionExecutionStatus.SUCCESS) return false
+        val postCtx = post.toBrowserTaskContext()
         return when (action) {
-            is TypedBrowserAction.OpenURL -> post.url.contains(action.url.take(15)) || post.url != "about:blank"
-            is TypedBrowserAction.TapElement -> post.url != pre.url || post.loadingState.scrollY != pre.loadingState.scrollY || result.isSuccess
-            is TypedBrowserAction.TypeText -> result.isSuccess
-            is TypedBrowserAction.Scroll -> true
-            else -> result.isSuccess
+            is TypedBrowserAction.OpenURL -> {
+                BrowserVerifier.verifyNavigation(action.url, postCtx).passed
+            }
+            is TypedBrowserAction.TapElement -> {
+                BrowserVerifier.verifyClick(pre.url, postCtx, action.targetIdOrIndex).passed
+            }
+            is TypedBrowserAction.TypeText -> {
+                BrowserVerifier.verifyTypeText(action.targetIdOrIndex, action.text, postCtx).passed
+            }
+            is TypedBrowserAction.Scroll -> {
+                BrowserVerifier.verifyScroll(action.direction, pre.loadingState.scrollY, pre.loadingState.maxScrollY, post.loadingState.scrollY, post.loadingState.maxScrollY).passed
+            }
+            is TypedBrowserAction.Reload -> {
+                BrowserVerifier.verifyReload(pre.generationId, postCtx).passed
+            }
+            is TypedBrowserAction.Back -> {
+                BrowserVerifier.verifyBack(pre.url, postCtx).passed
+            }
+            is TypedBrowserAction.Forward -> {
+                BrowserVerifier.verifyForward(pre.url, postCtx).passed
+            }
+            is TypedBrowserAction.ExtractText -> {
+                !result.extractedText.isNullOrBlank()
+            }
+            is TypedBrowserAction.ExtractTable -> {
+                result.extractedTables.isNotEmpty()
+            }
+            is TypedBrowserAction.Download -> {
+                val downloads = browserController.downloadManager.downloads.value
+                BrowserVerifier.verifyDownload(action.url, downloads).passed
+            }
+            is TypedBrowserAction.Done -> true
+            else -> result.isSuccess && result.status == ActionExecutionStatus.SUCCESS
         }
+    }
+
+    private fun PagePerceptionSnapshot.toBrowserTaskContext(): com.lichiai.browser.context.BrowserTaskContext {
+        return com.lichiai.browser.context.BrowserTaskContext(
+            currentUrl = this.url,
+            currentTitle = this.title,
+            perceptionGenerationId = this.generationId,
+            pageMetrics = this.loadingState,
+            interactiveElements = this.semanticElements.map {
+                com.lichiai.browser.context.BrowserInteractiveElement(
+                    index = it.originalIndex,
+                    tag = it.tag,
+                    type = it.type,
+                    text = it.labelOrText,
+                    id = it.semanticId,
+                    name = it.semanticId,
+                    placeholder = it.placeholder,
+                    ariaLabel = it.labelOrText,
+                    href = it.href,
+                    isClickable = it.isClickable,
+                    isInput = it.isInput,
+                    bounds = it.bounds,
+                    value = it.value
+                )
+            },
+            extractedCandidates = this.candidateLinks,
+            candidatePrices = this.candidatePrices,
+            extractedTables = this.extractedTables
+        )
     }
 
     private fun formulateRecovery(
         failedAction: TypedBrowserAction,
         currentObservation: PagePerceptionSnapshot
     ): TypedBrowserAction? {
+        val genId = currentObservation.generationId
         return when (failedAction) {
             is TypedBrowserAction.TapElement -> {
                 // If specific element was stale, try tapping first clickable candidate link or scrolling to make it visible
                 val firstCandidate = currentObservation.candidateLinks.firstOrNull()
-                if (firstCandidate != null) {
-                    TypedBrowserAction.OpenURL(firstCandidate.url)
+                if (firstCandidate != null && firstCandidate.url.isNotBlank()) {
+                    TypedBrowserAction.OpenURL(firstCandidate.url, generationId = genId)
                 } else {
-                    TypedBrowserAction.Scroll(com.lichiai.browser.api.ScrollDirection.DOWN, 1)
+                    TypedBrowserAction.Scroll(com.lichiai.browser.api.ScrollDirection.DOWN, 1, generationId = genId)
                 }
             }
             is TypedBrowserAction.OpenURL -> {
-                TypedBrowserAction.Reload()
+                TypedBrowserAction.Reload(generationId = genId)
             }
             else -> null
         }

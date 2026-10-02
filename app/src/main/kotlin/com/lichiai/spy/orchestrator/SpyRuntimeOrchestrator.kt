@@ -3,31 +3,41 @@ package com.lichiai.spy.orchestrator
 import android.content.Context
 import android.util.Log
 import com.lichiai.api.LlmClient
-import com.lichiai.data.AppSettings
+import com.lichiai.calling.contacts.PhoneNumberNormalizer
 import com.lichiai.data.ProviderConfig
 import com.lichiai.data.SettingsRepository
 import com.lichiai.spy.apify.ActorIdentifierResolver
 import com.lichiai.spy.apify.ApifyClient
-import com.lichiai.spy.model.PlatformCatalog
+import com.lichiai.spy.contact.PublicContactLookupService
 import com.lichiai.spy.core.PlatformType
+import com.lichiai.spy.core.SpyCapability
 import com.lichiai.spy.core.SpyError
 import com.lichiai.spy.core.SpyGate
 import com.lichiai.spy.core.SpyGateResult
+import com.lichiai.spy.core.SpyLookupMode
 import com.lichiai.spy.core.SpyOperation
 import com.lichiai.spy.core.SpyTask
-import com.lichiai.spy.discovery.ActorDiscoveryService
+import com.lichiai.spy.core.TargetType
 import com.lichiai.spy.discovery.ActorMetadata
+import com.lichiai.spy.discovery.PlatformCapabilityInferencer
 import com.lichiai.spy.interpreter.ActorInputBuilder
 import com.lichiai.spy.interpreter.SpyIntentParser
-import com.lichiai.spy.interpreter.TargetExtractor
 import com.lichiai.spy.model.PlatformProfile
-import com.lichiai.spy.model.PlatformSupportStatus
 import com.lichiai.spy.normalizer.NormalizedEntity
 import com.lichiai.spy.normalizer.SpyResultNormalizer
+import com.lichiai.spy.normalizer.SpyResultVerifier
+import com.lichiai.spy.normalizer.VerificationResult
+import com.lichiai.spy.registry.SpyProviderEntity
+import com.lichiai.spy.registry.SpyProviderRepository
+import com.lichiai.ui.spy.SpyProfileSerializer
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
 import java.util.Locale
 
 enum class SpyTaskStatus {
@@ -52,14 +62,21 @@ data class SpyExecutionResult(
     val profiles: List<PlatformProfile> = emptyList(),
     val normalizedData: List<NormalizedEntity> = emptyList(),
     val rawJsonSnippet: String = "",
-    val errorMessage: String? = null
+    val errorMessage: String? = null,
+    val reportId: String? = null,
+    val executedProviders: List<String> = emptyList(),
+    val partialFailure: Boolean = false,
+    val mode: SpyLookupMode = SpyLookupMode.SINGLE
 )
 
 /**
- * Production-grade runtime orchestrator for Lichi #Spy Platform Intelligence V2.
- * Coordinates token verification, language-aware entity extraction, actor discovery & validation,
- * async run lifecycle, dataset/KV retrieval, 4-stage fact verification, and structured intelligence synthesis.
- * Strict zero-Apify branding in user output.
+ * Production-grade runtime orchestrator for Lichi #Spy Platform Intelligence.
+ *
+ * Architecture:
+ * - Local Provider Registry is the execution authority (Hot path NEVER performs remote discovery, schema fetches, or verifyToken calls).
+ * - SINGLE Mode: Deterministically selects and executes exactly ONE enabled compatible provider.
+ * - FULL Mode: Concurrently executes ALL enabled compatible providers, isolates failures, aggregates observations,
+ *   preserves provenance and conflicts, and generates an HTML intelligence report.
  */
 class SpyRuntimeOrchestrator(
     private val context: Context,
@@ -68,7 +85,6 @@ class SpyRuntimeOrchestrator(
 ) {
     companion object {
         private const val TAG = "SpyOrchestrator"
-        private const val POLL_INTERVAL_MS = 2500L
         private const val MAX_RUN_TIME_MS = 120_000L
     }
 
@@ -78,7 +94,7 @@ class SpyRuntimeOrchestrator(
         }
     }
 
-    private val discoveryService = ActorDiscoveryService(apifyClient)
+    private val providerRepository = SpyProviderRepository.getInstance(context, apifyClient)
 
     suspend fun execute(
         rawInput: String,
@@ -98,6 +114,24 @@ class SpyRuntimeOrchestrator(
             )
         }
 
+        val cleanQuery = triggerResult.cleanQuery
+
+        // Step 1: Language-aware entity extraction and structured task creation
+        onProgress?.invoke(1, 6, "Parsing request...")
+        val task = SpyIntentParser.parse(cleanQuery, requestId = requestId, messageId = messageId)
+        val maskedTarget = if (task.targetType == TargetType.PHONE_NUMBER) {
+            PhoneNumberNormalizer.maskPhoneNumber(task.target)
+        } else task.target
+
+        Log.i(TAG, "Parsed Spy task: platform=${task.platform}, dynamicRef=${task.dynamicPlatformRef?.key}, mode=${task.lookupMode}, op=${task.operation}, target='$maskedTarget'")
+
+        // Step 2: Public Phone Lookup special route (when platform is UNKNOWN)
+        if (task.targetType == TargetType.PHONE_NUMBER && (task.platform == PlatformType.UNKNOWN || task.platform == PlatformType.GENERIC_WEB)) {
+            onProgress?.invoke(2, 6, "Contact type: Public Phone Number")
+            onProgress?.invoke(3, 6, "Target identified: $maskedTarget")
+            return@withContext PublicContactLookupService.execute(task, onProgress)
+        }
+
         val appSettings = settingsRepository.settings.first()
         val token = appSettings.apifyApiToken.trim()
 
@@ -110,43 +144,10 @@ class SpyRuntimeOrchestrator(
             )
         }
 
-        // Step 1: Validate Token Upfront
-        onProgress?.invoke(1, 6, "Understanding request...")
-        val userCheck = apifyClient.verifyToken()
-        if (userCheck.isFailure) {
-            val err = userCheck.exceptionOrNull()?.message ?: "Invalid token"
-            return@withContext SpyExecutionResult(
-                speech = "🔒 **Authentication Failed**\n\nCould not authenticate with intelligence backend. Please verify your token in Settings.\n\nDetails: $err",
-                isSuccess = false,
-                status = SpyTaskStatus.FAILED,
-                errorMessage = err
-            )
-        }
-
-        val cleanQuery = triggerResult.cleanQuery
-
-        // Step 2: Language-aware entity extraction and task creation
-        val task = SpyIntentParser.parse(cleanQuery, requestId = requestId, messageId = messageId)
-        Log.i(TAG, "Parsed Spy task: platform=${task.platform}, op=${task.operation}, target='${task.target}', fields=${task.requestedFields}")
-
-        onProgress?.invoke(2, 6, "Platform identified: ${task.platform.displayName}")
-
-        // 2.1 Check Platform Catalog Support Status
-        val platformDef = PlatformCatalog.getDefinition(task.platform)
-        if (platformDef.supportStatus == PlatformSupportStatus.UNSUPPORTED) {
-            return@withContext SpyExecutionResult(
-                speech = "⚠️ **Platform Unsupported**\n\nLICHI cannot retrieve ${task.platform.displayName}'s public profile data with the currently configured sources.",
-                isSuccess = false,
-                status = SpyTaskStatus.NO_RESULT,
-                task = task,
-                errorMessage = "Platform unsupported"
-            )
-        }
-
-        // 2.2 Deterministic Target Validation
         if (task.target.isBlank()) {
+            val platformLabel = task.dynamicPlatformRef?.displayName ?: task.platform.displayName
             return@withContext SpyExecutionResult(
-                speech = "⚠️ Could not identify a valid target or username in your request for ${task.platform.displayName}.\n\nPlease provide a username, handle (e.g. `@username`), or profile link.",
+                speech = "⚠️ Could not identify a valid target or username in your request for $platformLabel.\n\nPlease provide a username, handle (e.g. `@username`), or profile link.",
                 isSuccess = false,
                 status = SpyTaskStatus.FAILED,
                 task = task,
@@ -154,197 +155,401 @@ class SpyRuntimeOrchestrator(
             )
         }
 
+        val platformLabel = task.dynamicPlatformRef?.displayName ?: task.platform.displayName
+        onProgress?.invoke(2, 6, "Platform identified: $platformLabel (Mode: ${task.lookupMode})")
         onProgress?.invoke(3, 6, "Target identified: ${task.target}")
 
-        // Step 3: Discover Actor / Source
-        onProgress?.invoke(4, 6, "Finding and validating data source...")
-        val actorResult = discoveryService.discoverBestActor(
-            platform = task.platform,
-            operation = task.operation,
-            targetQuery = task.target,
-            freeFirstOnly = appSettings.spyFreeFirstOnly
-        )
+        // Step 3: Load enabled compatible providers from local Room Registry (Hot Path)
+        val enabledProviders = providerRepository.getEnabledProviders()
+        val platformKey = task.dynamicPlatformRef?.key ?: task.platform.id
 
-        if (actorResult.isFailure) {
-            val err = actorResult.exceptionOrNull()?.message ?: "Unknown error"
+        val compatibleProviders = filterCompatibleProviders(enabledProviders, platformKey, task)
+
+        if (compatibleProviders.isEmpty()) {
+            Log.w(TAG, "No enabled compatible providers found for platform '$platformKey'")
             return@withContext SpyExecutionResult(
-                speech = "⚠️ No compatible data source found for ${task.platform.displayName}.\n\nError: $err",
+                speech = "⚠️ **No Enabled Provider Configured**\n\nNo enabled compatible provider is configured for **$platformLabel**.\n\nPlease go to **Settings > Platform Intelligence (#Spy)** to search and enable providers.",
                 isSuccess = false,
                 status = SpyTaskStatus.NO_RESULT,
                 task = task,
-                errorMessage = err
+                errorMessage = "No enabled compatible provider configured"
             )
         }
 
-        var actor = actorResult.getOrThrow()
-        val canonicalActorId = ActorIdentifierResolver.toCanonicalApiId(actor.actorId)
-        Log.i(TAG, "Selected Actor: $canonicalActorId (${actor.title})")
-
-        // Step 4: Validate Selected Actor
-        val validationResult = apifyClient.validateActor(canonicalActorId)
-        if (validationResult.isSuccess) {
-            val detail = validationResult.getOrThrow()
-            actor = actor.copy(
-                actorId = canonicalActorId,
-                title = detail.title.ifBlank { actor.title },
-                description = detail.description.ifBlank { actor.description },
-                readme = detail.readme ?: actor.readme,
-                pricingModel = detail.pricingModel ?: actor.pricingModel,
-                exampleInputJson = detail.exampleRunInput?.body ?: actor.exampleInputJson
-            )
-        } else {
-            val validationError = validationResult.exceptionOrNull()?.message ?: "Actor validation failed"
-            Log.w(TAG, "Actor validation warning for $canonicalActorId: $validationError")
-            if (validationResult.exceptionOrNull() is SpyError.ActorNotFound) {
-                return@withContext SpyExecutionResult(
-                    speech = "⚠️ The requested source was not available for ${task.platform.displayName}.",
-                    isSuccess = false,
-                    status = SpyTaskStatus.FAILED,
-                    task = task,
-                    actor = actor,
-                    errorMessage = validationError
-                )
-            }
+        // Step 4: Branch execution based on mode (SINGLE vs FULL)
+        return@withContext when (task.lookupMode) {
+            SpyLookupMode.SINGLE -> executeSingleMode(task, compatibleProviders, appSettings.spyTimeoutSeconds, appSettings.spyMaxDatasetItems, onProgress)
+            SpyLookupMode.FULL -> executeFullMode(task, compatibleProviders, appSettings.spyTimeoutSeconds, appSettings.spyMaxDatasetItems, onProgress)
         }
+    }
 
-        // Step 5: Prepare Input & Start Run
-        onProgress?.invoke(5, 6, "Retrieving public profile...")
-        val actorInput = ActorInputBuilder.buildInput(task, actor)
-        Log.i(TAG, "Run Payload for $canonicalActorId: $actorInput")
+    /**
+     * SINGLE MODE: Executes exactly ONE deterministically selected provider. No hidden fallbacks.
+     */
+    private suspend fun executeSingleMode(
+        task: SpyTask,
+        candidates: List<SpyProviderEntity>,
+        timeoutSecs: Long,
+        maxItems: Int,
+        onProgress: ((step: Int, total: Int, statusText: String) -> Unit)?
+    ): SpyExecutionResult {
+        val selectedProvider = selectBestSingleProvider(candidates, task)
+        val canonicalId = selectedProvider.canonicalActorId
+        onProgress?.invoke(4, 6, "Executing provider: ${selectedProvider.title}")
 
-        val runStartResult = apifyClient.startActorRun(
-            actorId = canonicalActorId,
-            inputJson = actorInput,
-            timeoutSecs = appSettings.spyTimeoutSeconds
+        val executionResult = executeSingleProviderRun(selectedProvider, task, timeoutSecs, maxItems, onProgress)
+
+        // Record health stats
+        providerRepository.recordExecution(
+            providerId = canonicalId,
+            isSuccess = executionResult.isSuccess,
+            latencyMs = executionResult.latencyMs
         )
 
-        if (runStartResult.isFailure) {
-            val err = runStartResult.exceptionOrNull()?.message ?: "Failed to retrieve public data"
-            return@withContext SpyExecutionResult(
-                speech = "❌ Failed to retrieve public profile data for ${task.platform.displayName}.\n\nDetails: $err",
+        if (!executionResult.isSuccess) {
+            val err = executionResult.error ?: "Provider execution failed"
+            return SpyExecutionResult(
+                speech = "❌ **Provider Execution Failed**\n\nProvider **${selectedProvider.title}** failed to retrieve verified data.\n\nDetails: $err",
                 isSuccess = false,
                 status = SpyTaskStatus.FAILED,
                 task = task,
-                actor = actor,
-                errorMessage = err
+                errorMessage = err,
+                executedProviders = listOf(canonicalId),
+                mode = SpyLookupMode.SINGLE
             )
         }
 
-        val runData = runStartResult.getOrThrow()
-        val runId = runData.id
-        Log.i(TAG, "Run started: id=$runId, defaultDatasetId=${runData.defaultDatasetId}")
+        val verifiedEntities = executionResult.verifiedEntities
+        if (verifiedEntities.isEmpty()) {
+            return SpyExecutionResult(
+                speech = "ℹ️ **No Public Profile Data Found**\n\nNo verified public profile data was returned for **${task.target}** on ${task.platform.displayName}.\n\nPossible causes:\n• Account is private or restricted\n• Account does not exist\n• Platform rate limited anonymous requests",
+                isSuccess = false,
+                status = SpyTaskStatus.NO_RESULT,
+                task = task,
+                executedProviders = listOf(canonicalId),
+                mode = SpyLookupMode.SINGLE
+            )
+        }
 
-        // Step 6: Poll for run completion
+        val profiles = verifiedEntities.map { it.toPlatformProfile(task.platform, canonicalId).copy(previewRequested = task.previewRequested) }
+        val primaryProfile = profiles.firstOrNull()
+
+        val synthesizedText = formatIntelligenceReport(task, profiles)
+        val embeddedSpeech = if (primaryProfile != null) {
+            SpyProfileSerializer.embedProfile(primaryProfile, synthesizedText)
+        } else synthesizedText
+
+        return SpyExecutionResult(
+            speech = embeddedSpeech,
+            isSuccess = true,
+            status = SpyTaskStatus.COMPLETED,
+            task = task,
+            primaryProfile = primaryProfile,
+            profiles = profiles,
+            normalizedData = verifiedEntities,
+            rawJsonSnippet = executionResult.rawSnippet,
+            executedProviders = listOf(canonicalId),
+            mode = SpyLookupMode.SINGLE
+        )
+    }
+
+    /**
+     * FULL MODE: Executes ALL enabled compatible providers concurrently.
+     * Isolates provider failures, aggregates observations, detects conflicts, and generates an HTML report.
+     */
+    private suspend fun executeFullMode(
+        task: SpyTask,
+        candidates: List<SpyProviderEntity>,
+        timeoutSecs: Long,
+        maxItems: Int,
+        onProgress: ((step: Int, total: Int, statusText: String) -> Unit)?
+    ): SpyExecutionResult = coroutineScope {
+        onProgress?.invoke(4, 6, "Running ${candidates.size} enabled providers concurrently...")
+
+        val deferredResults = candidates.map { provider ->
+            async {
+                val res = executeSingleProviderRun(provider, task, timeoutSecs, maxItems, null)
+                providerRepository.recordExecution(
+                    providerId = provider.canonicalActorId,
+                    isSuccess = res.isSuccess,
+                    latencyMs = res.latencyMs
+                )
+                provider to res
+            }
+        }
+
+        val completedRuns = deferredResults.awaitAll()
+
+        val providerStats = mutableListOf<ProviderExecutionStats>()
+        val allVerifiedEntities = mutableListOf<NormalizedEntity>()
+        var combinedRawSnippets = ""
+
+        for ((provider, runResult) in completedRuns) {
+            val stat = ProviderExecutionStats(
+                providerId = provider.canonicalActorId,
+                providerName = provider.title,
+                status = if (runResult.isSuccess) "SUCCESS" else "FAILED",
+                latencyMs = runResult.latencyMs,
+                recordCount = runResult.verifiedEntities.size,
+                error = runResult.error
+            )
+            providerStats.add(stat)
+
+            if (runResult.isSuccess) {
+                allVerifiedEntities.addAll(runResult.verifiedEntities)
+                if (runResult.rawSnippet.isNotBlank() && combinedRawSnippets.length < 2000) {
+                    combinedRawSnippets += "\n" + runResult.rawSnippet
+                }
+            }
+        }
+
+        val executedProviderIds = candidates.map { it.canonicalActorId }
+        val hasAnySuccess = allVerifiedEntities.isNotEmpty()
+
+        if (!hasAnySuccess) {
+            val errorSummary = completedRuns.mapNotNull { it.second.error }.take(3).joinToString("; ")
+            return@coroutineScope SpyExecutionResult(
+                speech = "❌ **All Providers Failed in FULL Mode**\n\nExecuted ${candidates.size} providers, but none returned verified public data.\n\nDetails: ${errorSummary.ifBlank { "No verified data returned" }}",
+                isSuccess = false,
+                status = SpyTaskStatus.FAILED,
+                task = task,
+                executedProviders = executedProviderIds,
+                mode = SpyLookupMode.FULL
+            )
+        }
+
+        onProgress?.invoke(6, 6, "Synthesizing multi-source intelligence report...")
+
+        // Aggregate and merge multi-provider observations
+        val unifiedProfile = SpyEvidenceMerger.mergeEntities(allVerifiedEntities, task, executedProviderIds)
+
+        // Generate HTML Report
+        val htmlReport = SpyHtmlReportRenderer.renderHtml(
+            task = task,
+            profile = unifiedProfile,
+            providerStats = providerStats,
+            conflicts = unifiedProfile.conflicts
+        )
+
+        val reportId = SpyReportStore.saveReport(context, htmlReport)
+        val profileWithReport = unifiedProfile.copy(reportId = reportId, previewRequested = task.previewRequested)
+
+        val synthesizedText = formatFullModeIntelligenceReport(task, profileWithReport, providerStats)
+        val embeddedSpeech = SpyProfileSerializer.embedProfile(profileWithReport, synthesizedText)
+
+        SpyExecutionResult(
+            speech = embeddedSpeech,
+            isSuccess = true,
+            status = SpyTaskStatus.COMPLETED,
+            task = task,
+            primaryProfile = profileWithReport,
+            profiles = listOf(profileWithReport),
+            normalizedData = allVerifiedEntities,
+            rawJsonSnippet = combinedRawSnippets.take(1500),
+            reportId = reportId,
+            executedProviders = executedProviderIds,
+            partialFailure = providerStats.any { it.status == "FAILED" },
+            mode = SpyLookupMode.FULL
+        )
+    }
+
+    private data class SingleRunOutcome(
+        val isSuccess: Boolean,
+        val verifiedEntities: List<NormalizedEntity> = emptyList(),
+        val rawSnippet: String = "",
+        val latencyMs: Long = 0,
+        val error: String? = null
+    )
+
+    private suspend fun executeSingleProviderRun(
+        provider: SpyProviderEntity,
+        task: SpyTask,
+        timeoutSecs: Long,
+        maxItems: Int,
+        onProgress: ((step: Int, total: Int, statusText: String) -> Unit)?
+    ): SingleRunOutcome {
         val startTime = System.currentTimeMillis()
-        var finalDatasetId = runData.defaultDatasetId
-        var finalKvStoreId = runData.defaultKeyValueStoreId
-        var isFinished = false
+        val canonicalId = provider.canonicalActorId
 
-        while (!isFinished && (System.currentTimeMillis() - startTime) < MAX_RUN_TIME_MS) {
+        return try {
+            val payload = ActorInputBuilder.buildInput(task, provider)
+            Log.i(TAG, "Run payload for $canonicalId: $payload")
+
+            val startResult = apifyClient.startActorRun(
+                actorId = canonicalId,
+                inputJson = payload,
+                timeoutSecs = timeoutSecs
+            )
+
+            if (startResult.isFailure) {
+                val err = startResult.exceptionOrNull()?.message ?: "Failed to start Actor run"
+                return SingleRunOutcome(
+                    isSuccess = false,
+                    latencyMs = System.currentTimeMillis() - startTime,
+                    error = err
+                )
+            }
+
+            val runData = startResult.getOrThrow()
+            val runId = runData.id
+
+            // Adaptive polling
+            val (pollSuccess, datasetId, kvId, statusError) = pollRunStatus(runId, startTime, onProgress)
+
+            if (!pollSuccess) {
+                return SingleRunOutcome(
+                    isSuccess = false,
+                    latencyMs = System.currentTimeMillis() - startTime,
+                    error = statusError ?: "Actor run did not succeed"
+                )
+            }
+
+            // Retrieve Dataset items or KV output
+            val rawItems = if (!datasetId.isNullOrBlank()) {
+                apifyClient.getDatasetItems(datasetId, limit = maxItems).getOrNull()
+            } else null
+
+            val kvOutput = if ((rawItems == null || rawItems.isEmpty()) && !kvId.isNullOrBlank()) {
+                apifyClient.getKeyValueRecord(kvId, "OUTPUT").getOrNull()
+            } else null
+
+            val latencyMs = System.currentTimeMillis() - startTime
+
+            if (rawItems != null && rawItems.isNotEmpty()) {
+                val normalizedList = SpyResultNormalizer.normalize(rawItems, task, providerId = canonicalId)
+                val verifiedList = normalizedList.filter { entity ->
+                    val vResult = SpyResultVerifier.verifyEntity(entity, task)
+                    vResult is VerificationResult.Verified
+                }
+
+                if (verifiedList.isNotEmpty()) {
+                    SingleRunOutcome(
+                        isSuccess = true,
+                        verifiedEntities = verifiedList,
+                        rawSnippet = rawItems.toString().take(1000),
+                        latencyMs = latencyMs
+                    )
+                } else {
+                    SingleRunOutcome(
+                        isSuccess = false,
+                        latencyMs = latencyMs,
+                        error = "Returned records failed target verification"
+                    )
+                }
+            } else if (!kvOutput.isNullOrBlank() && !kvOutput.trim().startsWith("[]")) {
+                SingleRunOutcome(
+                    isSuccess = true,
+                    verifiedEntities = listOf(
+                        NormalizedEntity(
+                            title = task.target,
+                            identifier = task.target,
+                            bioOrDescription = kvOutput.take(300),
+                            rawJsonSnippet = kvOutput.take(500),
+                            providerId = canonicalId
+                        )
+                    ),
+                    rawSnippet = kvOutput.take(1000),
+                    latencyMs = latencyMs
+                )
+            } else {
+                SingleRunOutcome(
+                    isSuccess = false,
+                    latencyMs = latencyMs,
+                    error = "No dataset items or KV output returned"
+                )
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "Error executing provider $canonicalId: ${e.message}", e)
+            SingleRunOutcome(
+                isSuccess = false,
+                latencyMs = System.currentTimeMillis() - startTime,
+                error = e.message ?: "Execution error"
+            )
+        }
+    }
+
+    private data class PollResult(
+        val isSuccess: Boolean,
+        val datasetId: String?,
+        val kvStoreId: String?,
+        val error: String?
+    )
+
+    private suspend fun pollRunStatus(
+        runId: String,
+        startTime: Long,
+        onProgress: ((step: Int, total: Int, statusText: String) -> Unit)?
+    ): PollResult {
+        var delayMs = 350L
+        var finalDatasetId: String? = null
+        var finalKvId: String? = null
+
+        while ((System.currentTimeMillis() - startTime) < MAX_RUN_TIME_MS) {
             val elapsedSecs = (System.currentTimeMillis() - startTime) / 1000
-            onProgress?.invoke(5, 6, "Processing profile data (${elapsedSecs}s)...")
-            delay(POLL_INTERVAL_MS)
+            onProgress?.invoke(5, 6, "Retrieving public data (${elapsedSecs}s)...")
+            delay(delayMs)
+            delayMs = (delayMs + 350L).coerceAtMost(1500L) // Adaptive backoff
 
             val statusResult = apifyClient.getRunStatus(runId)
             if (statusResult.isSuccess) {
-                val currentStatus = statusResult.getOrThrow()
-                finalDatasetId = currentStatus.defaultDatasetId ?: finalDatasetId
-                finalKvStoreId = currentStatus.defaultKeyValueStoreId ?: finalKvStoreId
+                val runData = statusResult.getOrThrow()
+                finalDatasetId = runData.defaultDatasetId ?: finalDatasetId
+                finalKvId = runData.defaultKeyValueStoreId ?: finalKvId
 
-                when (currentStatus.status.uppercase(Locale.ROOT)) {
+                when (runData.status.uppercase(Locale.ROOT)) {
                     "SUCCEEDED" -> {
-                        isFinished = true
+                        return PollResult(true, finalDatasetId, finalKvId, null)
                     }
                     "FAILED", "ABORTED", "TIMED-OUT" -> {
-                        return@withContext SpyExecutionResult(
-                            speech = "❌ Profile lookup ended with status: ${currentStatus.status}.",
-                            isSuccess = false,
-                            status = SpyTaskStatus.FAILED,
-                            task = task,
-                            actor = actor,
-                            errorMessage = "Run status: ${currentStatus.status}"
-                        )
+                        return PollResult(false, finalDatasetId, finalKvId, "Run ended with status: ${runData.status}")
                     }
                 }
             }
         }
 
-        onProgress?.invoke(6, 6, "Building intelligence report...")
+        return PollResult(false, finalDatasetId, finalKvId, "Execution timed out")
+    }
 
-        // Step 7: Fetch dataset items or KV store records
-        val rawItems = if (!finalDatasetId.isNullOrBlank()) {
-            apifyClient.getDatasetItems(finalDatasetId, limit = appSettings.spyMaxDatasetItems).getOrNull()
-        } else null
+    private fun filterCompatibleProviders(
+        providers: List<SpyProviderEntity>,
+        platformKey: String,
+        task: SpyTask
+    ): List<SpyProviderEntity> {
+        val cleanKey = platformKey.lowercase(Locale.ROOT)
+        return providers.filter { entity ->
+            val matchesPlatform = entity.platformKeys.any { it.equals(cleanKey, ignoreCase = true) }
+                || entity.actorName.contains(cleanKey, ignoreCase = true)
+                || entity.title.contains(cleanKey, ignoreCase = true)
+                || entity.platformKeys.contains("web")
+            val hasSchema = entity.hasValidSchema()
+            val isRunnable = entity.runnableState != "UNRUNNABLE"
+            matchesPlatform && hasSchema && isRunnable
+        }
+    }
 
-        val kvOutput = if ((rawItems == null || rawItems.isEmpty()) && !finalKvStoreId.isNullOrBlank()) {
-            apifyClient.getKeyValueRecord(finalKvStoreId, "OUTPUT").getOrNull()
-        } else null
+    private fun selectBestSingleProvider(
+        candidates: List<SpyProviderEntity>,
+        task: SpyTask
+    ): SpyProviderEntity {
+        val platformKey = task.dynamicPlatformRef?.key ?: task.platform.id
 
-        // Step 8: Fact Extraction & 4-Stage Verification
-        if (rawItems == null || rawItems.isEmpty()) {
-            if (!kvOutput.isNullOrBlank() && !kvOutput.trim().startsWith("[]")) {
-                return@withContext SpyExecutionResult(
-                    speech = "🕵️ **Lichi Platform Intelligence**\n\n```json\n${kvOutput.take(1500)}\n```",
-                    isSuccess = true,
-                    status = SpyTaskStatus.COMPLETED,
-                    task = task,
-                    actor = actor,
-                    rawJsonSnippet = kvOutput.take(1500)
-                )
+        return candidates.maxWithOrNull(
+            compareBy<SpyProviderEntity> { entity ->
+                // Exact platform key match
+                if (entity.platformKeys.contains(platformKey)) 100 else 50
+            }.thenBy { entity ->
+                // Success count and rate
+                val total = entity.successCount + entity.failureCount
+                if (total > 0) (entity.successCount.toDouble() / total) * 50.0 else 25.0
+            }.thenByDescending { entity ->
+                // Latency (lower is better)
+                if (entity.averageLatencyMs > 0) -entity.averageLatencyMs else 0
+            }.thenBy { entity ->
+                entity.selectionPriority
+            }.thenBy { entity ->
+                entity.canonicalActorId
             }
-
-            return@withContext SpyExecutionResult(
-                speech = "ℹ️ **No Public Profile Data Found**\n\nNo public data records were returned for **${task.target}** on ${task.platform.displayName}.\n\nPossible causes:\n• Account is private or restricted\n• Account does not exist\n• Platform rate limited anonymous requests",
-                isSuccess = false,
-                status = SpyTaskStatus.NO_RESULT,
-                task = task,
-                actor = actor
-            )
-        }
-
-        val normalizedList = SpyResultNormalizer.normalize(rawItems, task)
-        val verifiedEntities = normalizedList.filter { it.hasGenuineData() }
-        val profiles = verifiedEntities.map { it.toPlatformProfile(task.platform).copy(previewRequested = task.previewRequested) }
-
-        // If no entity contains genuine scraped facts
-        if (verifiedEntities.isEmpty()) {
-            val scraperError = normalizedList.firstOrNull { !it.scraperError.isNullOrBlank() }?.scraperError
-            val errorDetails = if (!scraperError.isNullOrBlank()) "\n\nSource note: $scraperError" else ""
-            return@withContext SpyExecutionResult(
-                speech = "⚠️ **Verification Incomplete**\n\nA record for **${task.target}** was retrieved, but no public profile metrics (followers, bio, or name) could be verified.$errorDetails",
-                isSuccess = false,
-                status = SpyTaskStatus.NO_RESULT,
-                task = task,
-                actor = actor,
-                normalizedData = normalizedList,
-                rawJsonSnippet = rawItems.toString().take(1000)
-            )
-        }
-
-        // Step 9: Format Structured Intelligence Report
-        val primaryProfile = profiles.firstOrNull()
-        val synthesizedText = formatIntelligenceReport(
-            task = task,
-            profiles = profiles
-        )
-
-        val embeddedSpeech = if (primaryProfile != null) {
-            com.lichiai.ui.spy.SpyProfileSerializer.embedProfile(primaryProfile, synthesizedText)
-        } else {
-            synthesizedText
-        }
-
-        return@withContext SpyExecutionResult(
-            speech = embeddedSpeech,
-            isSuccess = true,
-            status = SpyTaskStatus.COMPLETED,
-            task = task,
-            actor = actor,
-            primaryProfile = primaryProfile,
-            profiles = profiles,
-            normalizedData = verifiedEntities,
-            rawJsonSnippet = rawItems.toString().take(1000)
-        )
+        ) ?: candidates.first()
     }
 
     private fun formatIntelligenceReport(
@@ -352,7 +557,7 @@ class SpyRuntimeOrchestrator(
         profiles: List<PlatformProfile>
     ): String {
         val sb = StringBuilder()
-        val platformName = task.platform.displayName
+        val platformName = task.dynamicPlatformRef?.displayName ?: task.platform.displayName
 
         if (task.operation == SpyOperation.PUBLIC_EMAIL_LOOKUP) {
             val email = profiles.firstNotNullOfOrNull { it.publicEmail.takeIf { e -> e.isNotBlank() } }
@@ -440,31 +645,41 @@ class SpyRuntimeOrchestrator(
                 sb.append("• **Public Business Phone:** `${profile.publicPhone}`\n")
             }
 
-            val profileLink = if (profile.profileUrl.isNotBlank()) {
-                profile.profileUrl
-            } else when (task.platform) {
-                PlatformType.INSTAGRAM -> "https://www.instagram.com/$usernameDisplay/"
-                PlatformType.YOUTUBE -> "https://www.youtube.com/@$usernameDisplay"
-                PlatformType.REDDIT -> "https://www.reddit.com/r/$usernameDisplay"
-                PlatformType.TIKTOK -> "https://www.tiktok.com/@$usernameDisplay"
-                PlatformType.TWITTER_X -> "https://twitter.com/$usernameDisplay"
-                PlatformType.GITHUB -> "https://github.com/$usernameDisplay"
-                else -> ""
-            }
-
-            if (profileLink.isNotBlank()) {
-                sb.append("• **Profile Link:** $profileLink\n")
-            }
-
             if (profile.highlights.isNotEmpty()) {
                 sb.append("\n**Recent Highlights:**\n")
-                profile.highlights.forEach { h ->
+                profile.highlights.take(3).forEach { h ->
                     sb.append("• \"$h\"\n")
                 }
             }
 
             sb.append("\n")
         }
+
+        return sb.toString().trim()
+    }
+
+    private fun formatFullModeIntelligenceReport(
+        task: SpyTask,
+        profile: PlatformProfile,
+        providerStats: List<ProviderExecutionStats>
+    ): String {
+        val sb = StringBuilder()
+        val platformName = task.dynamicPlatformRef?.displayName ?: task.platform.displayName
+        val successCount = providerStats.count { it.status == "SUCCESS" }
+        val totalCount = providerStats.size
+
+        sb.append("🛡️ **Platform Intelligence Aggregation (FULL Mode)**\n\n")
+        sb.append("• **Platform:** $platformName\n")
+        sb.append("• **Target:** `@${profile.username.ifBlank { task.target }}`\n")
+        sb.append("• **Providers Executed:** $totalCount ($successCount succeeded)\n")
+        sb.append("• **Confidence:** ${profile.sourceConfidence}\n")
+
+        if (profile.conflicts.isNotEmpty()) {
+            sb.append("• **Conflicts Detected:** ${profile.conflicts.size} differing observation(s)\n")
+        }
+
+        sb.append("\n")
+        sb.append(formatIntelligenceReport(task, listOf(profile)))
 
         return sb.toString().trim()
     }

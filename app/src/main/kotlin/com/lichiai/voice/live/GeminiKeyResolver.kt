@@ -4,7 +4,7 @@ import com.lichiai.data.ProviderConfig
 import com.lichiai.data.ProviderStore
 
 /**
- * Resolves the Google Gemini API key from existing providers without creating a second key system.
+ * Resolves the Google Gemini API key from configured providers and environment variables.
  */
 object GeminiKeyResolver {
 
@@ -40,6 +40,10 @@ object GeminiKeyResolver {
         activeProvider: ProviderConfig?,
         providerStore: ProviderStore?
     ): String? {
-        return resolveGeminiProvider(activeProvider, providerStore)?.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+        val providerKey = resolveGeminiProvider(activeProvider, providerStore)?.apiKey?.trim()?.takeIf { it.isNotEmpty() }
+        if (!providerKey.isNullOrBlank()) return providerKey
+
+        // Fallback to environment variable if present
+        return runCatching { System.getenv("GEMINI_API_KEY")?.trim()?.takeIf { it.isNotEmpty() } }.getOrNull()
     }
 }

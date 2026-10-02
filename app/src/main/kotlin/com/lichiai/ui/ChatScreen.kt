@@ -124,7 +124,8 @@ fun ChatScreen(
     onOpenSettings: () -> Unit,
     onPickModel: () -> Unit,
     onOpenVoiceMode: () -> Unit = {},
-    onOpenBrowser: () -> Unit = {}
+    onOpenBrowser: () -> Unit = {},
+    onOpenReport: ((String) -> Unit)? = null
 ) {
     var input by rememberSaveable { mutableStateOf("") }
     var pendingAttachments by remember { mutableStateOf<List<Attachment>>(emptyList()) }
@@ -184,7 +185,7 @@ fun ChatScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .background(LichiVisualTokens.BackgroundLight)
+            .background(MaterialTheme.colorScheme.background)
             .imePadding()
     ) {
         // 1. Floating Top Bar
@@ -257,7 +258,8 @@ fun ChatScreen(
                             editingDraft = ""
                         },
                         onDelete = { onDeleteMessage(msg.id) },
-                        onRegenerateFrom = { onRegenerateFrom(msg.id) }
+                        onRegenerateFrom = { onRegenerateFrom(msg.id) },
+                        onOpenReport = onOpenReport
                     )
                 }
             }
@@ -294,14 +296,19 @@ private fun LichiEmptyChatLanding(
 ) {
     val scrollState = rememberScrollState()
 
-    val suggestions = remember {
+    val cardConceptsBg = LichiVisualTokens.CardConceptsBg
+    val cardCreativityBg = LichiVisualTokens.CardCreativityBg
+    val cardProductivityBg = LichiVisualTokens.CardProductivityBg
+    val cardLanguagesBg = LichiVisualTokens.CardLanguagesBg
+
+    val suggestions = remember(cardConceptsBg, cardCreativityBg, cardProductivityBg, cardLanguagesBg) {
         listOf(
             LichiSuggestionData(
                 category = "CONCEPTS",
                 prompt = "Explain what an LLM is in one paragraph.",
                 icon = Icons.Default.AutoAwesome,
                 categoryColor = LichiVisualTokens.CardConceptsFg,
-                tileBgColor = LichiVisualTokens.CardConceptsBg,
+                tileBgColor = cardConceptsBg,
                 iconColor = LichiVisualTokens.CardConceptsIcon
             ),
             LichiSuggestionData(
@@ -309,7 +316,7 @@ private fun LichiEmptyChatLanding(
                 prompt = "Write a haiku about Android development.",
                 icon = Icons.Default.SmartToy,
                 categoryColor = LichiVisualTokens.CardCreativityFg,
-                tileBgColor = LichiVisualTokens.CardCreativityBg,
+                tileBgColor = cardCreativityBg,
                 iconColor = LichiVisualTokens.CardCreativityIcon
             ),
             LichiSuggestionData(
@@ -317,7 +324,7 @@ private fun LichiEmptyChatLanding(
                 prompt = "Give me 5 tips for productive remote work.",
                 icon = Icons.Default.Lightbulb,
                 categoryColor = LichiVisualTokens.CardProductivityFg,
-                tileBgColor = LichiVisualTokens.CardProductivityBg,
+                tileBgColor = cardProductivityBg,
                 iconColor = LichiVisualTokens.CardProductivityIcon
             ),
             LichiSuggestionData(
@@ -325,7 +332,7 @@ private fun LichiEmptyChatLanding(
                 prompt = "Translate \"Good morning\" into Japanese.",
                 icon = Icons.Default.Translate,
                 categoryColor = LichiVisualTokens.CardLanguagesFg,
-                tileBgColor = LichiVisualTokens.CardLanguagesBg,
+                tileBgColor = cardLanguagesBg,
                 iconColor = LichiVisualTokens.CardLanguagesIcon
             )
         )
@@ -398,7 +405,8 @@ private fun LichiMessageItem(
     onCommitEdit: () -> Unit = {},
     onCancelEdit: () -> Unit = {},
     onDelete: () -> Unit = {},
-    onRegenerateFrom: () -> Unit = {}
+    onRegenerateFrom: () -> Unit = {},
+    onOpenReport: ((String) -> Unit)? = null
 ) {
     val isUser = message.role == "user"
     if (isUser) {
@@ -425,7 +433,8 @@ private fun LichiMessageItem(
             isSpeaking = isSpeaking,
             onToggleSpeak = onToggleSpeak,
             onDelete = onDelete,
-            onRegenerate = onRegenerateFrom
+            onRegenerate = onRegenerateFrom,
+            onOpenReport = onOpenReport
         )
     }
 }
@@ -493,9 +502,11 @@ private fun LichiUserBubble(
             if (editing) {
                 Surface(
                     shape = RoundedCornerShape(20.dp),
-                    color = LichiVisualTokens.SurfaceWhite,
+                    color = MaterialTheme.colorScheme.surface,
                     shadowElevation = 2.dp,
-                    modifier = Modifier.padding(2.dp)
+                    modifier = Modifier
+                        .padding(2.dp)
+                        .border(0.8.dp, LichiVisualTokens.SurfaceBorder, RoundedCornerShape(20.dp))
                 ) {
                     Column(modifier = Modifier.padding(12.dp)) {
                         androidx.compose.foundation.text.BasicTextField(
@@ -503,7 +514,7 @@ private fun LichiUserBubble(
                             onValueChange = onEditingDraftChange,
                             modifier = Modifier.fillMaxWidth(),
                             textStyle = MaterialTheme.typography.bodyLarge.copy(
-                                color = LichiVisualTokens.TextNavy,
+                                color = MaterialTheme.colorScheme.onSurface,
                                 fontSize = 15.sp,
                                 lineHeight = 21.sp
                             ),
@@ -515,7 +526,7 @@ private fun LichiUserBubble(
                             modifier = Modifier.fillMaxWidth()
                         ) {
                             androidx.compose.material3.TextButton(onClick = onCancelEdit) {
-                                Text(stringResource(R.string.cancel), color = LichiVisualTokens.TextGray)
+                                Text(stringResource(R.string.cancel), color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Spacer(Modifier.width(4.dp))
                             androidx.compose.material3.TextButton(onClick = onCommitEdit) {
@@ -530,7 +541,7 @@ private fun LichiUserBubble(
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(20.dp))
-                            .background(Color(0xFFEBE6FB))
+                            .background(LichiVisualTokens.UserBubbleBg)
                             .combinedClickable(
                                 onClick = {},
                                 onLongClick = { menuOpen = true }
@@ -545,7 +556,7 @@ private fun LichiUserBubble(
                                     lineHeight = 21.sp,
                                     fontWeight = FontWeight.Normal
                                 ),
-                                color = LichiVisualTokens.TextNavy
+                                color = LichiVisualTokens.UserBubbleText
                             )
                         }
                     }
@@ -609,7 +620,8 @@ private fun LichiAssistantRow(
     isSpeaking: Boolean = false,
     onToggleSpeak: () -> Unit = {},
     onDelete: () -> Unit,
-    onRegenerate: () -> Unit
+    onRegenerate: () -> Unit,
+    onOpenReport: ((String) -> Unit)? = null
 ) {
     val context = LocalContext.current
     val clipboard = LocalClipboardManager.current
@@ -629,21 +641,21 @@ private fun LichiAssistantRow(
             .fillMaxWidth()
             .padding(horizontal = 4.dp)
     ) {
-        // 1. Assistant Metadata Header (Small and lightweight)
+        // 1. Assistant Metadata Header (Small, clean, and lightweight)
         Row(
             verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.padding(bottom = 6.dp)
+            modifier = Modifier.padding(bottom = 4.dp)
         ) {
             Box(
                 modifier = Modifier
-                    .size(20.dp)
-                    .clip(RoundedCornerShape(6.dp))
-                    .background(LichiVisualTokens.BrandPurpleSoftBg),
+                    .size(18.dp)
+                    .clip(RoundedCornerShape(5.dp))
+                    .background(MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)),
                 contentAlignment = Alignment.Center
             ) {
-                LichiSparkleLogo(modifier = Modifier.size(13.dp))
+                LichiSparkleLogo(modifier = Modifier.size(12.dp))
             }
-            Spacer(Modifier.width(8.dp))
+            Spacer(Modifier.width(7.dp))
             Text(
                 text = "LICHI–AI",
                 style = MaterialTheme.typography.labelSmall.copy(
@@ -660,11 +672,11 @@ private fun LichiAssistantRow(
                     fontWeight = FontWeight.Normal,
                     fontSize = 11.5.sp
                 ),
-                color = LichiVisualTokens.TextGraySubtle
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.75f)
             )
         }
 
-        // 2. Activity Indicators (Live Task / Stored Task / Web / Thinking)
+        // 2. Compact Inline Task Status (Positioned immediately below header, before response)
         val act = if (isLastAssistant) {
             liveActivityState
                 ?: message.taskActivity
@@ -677,11 +689,11 @@ private fun LichiAssistantRow(
             com.lichiai.ui.activity.TaskActivityChip(
                 activity = act,
                 messageId = message.id,
-                modifier = Modifier.padding(bottom = 8.dp)
+                modifier = Modifier.padding(bottom = 4.dp)
             )
         }
 
-        // 3. Response Content: Plain text directly on the screen background (NO white card container)
+        // 3. Response Content: Natural conversational text directly on screen
         val spyProfile = remember(message.content) {
             SpyProfileSerializer.extractProfile(message.content)
         }
@@ -703,16 +715,18 @@ private fun LichiAssistantRow(
                         profile = spyProfile,
                         onAnalyzeWebsite = { webUrl ->
                             // Analyze website action
-                        }
+                        },
+                        onViewReport = onOpenReport
                     )
                 }
-                Spacer(Modifier.height(8.dp))
+                Spacer(Modifier.height(6.dp))
             }
             if (cleanMarkdown.isNotEmpty()) {
                 SelectionContainer {
                     MarkdownText(
                         text = cleanMarkdown,
-                        color = LichiVisualTokens.TextNavy,
+                        messageId = message.id,
+                        color = MaterialTheme.colorScheme.onBackground,
                         modifier = Modifier.fillMaxWidth()
                     )
                 }
@@ -744,7 +758,7 @@ private fun LichiAssistantRow(
                     Icon(
                         imageVector = if (copied) Icons.Default.Check else Icons.Default.ContentCopy,
                         contentDescription = "Copy message",
-                        tint = if (copied) LichiVisualTokens.StatusGreen else LichiVisualTokens.TextGray,
+                        tint = if (copied) LichiVisualTokens.StatusGreen else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -765,7 +779,7 @@ private fun LichiAssistantRow(
                     Icon(
                         imageVector = if (isLiked == true) Icons.Default.ThumbUp else Icons.Outlined.ThumbUp,
                         contentDescription = "Like response",
-                        tint = if (isLiked == true) LichiVisualTokens.BrandPurple else LichiVisualTokens.TextGray,
+                        tint = if (isLiked == true) LichiVisualTokens.BrandPurple else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -786,7 +800,7 @@ private fun LichiAssistantRow(
                     Icon(
                         imageVector = Icons.Default.VolumeUp,
                         contentDescription = if (isSpeaking) "Stop reading" else "Read aloud",
-                        tint = if (isSpeaking) LichiVisualTokens.BrandPurple else LichiVisualTokens.TextGray,
+                        tint = if (isSpeaking) LichiVisualTokens.BrandPurple else MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(17.dp)
                     )
                 }
@@ -813,7 +827,7 @@ private fun LichiAssistantRow(
                     Icon(
                         imageVector = Icons.Default.Share,
                         contentDescription = "Share response",
-                        tint = LichiVisualTokens.TextGray,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
                         modifier = Modifier.size(16.dp)
                     )
                 }
@@ -835,7 +849,7 @@ private fun LichiAssistantRow(
                         Icon(
                             imageVector = Icons.Default.MoreVert,
                             contentDescription = "More actions",
-                            tint = LichiVisualTokens.TextGray,
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier.size(16.dp)
                         )
                     }

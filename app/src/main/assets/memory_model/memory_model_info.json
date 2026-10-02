@@ -1,0 +1,25 @@
+{
+  "modelId": "MongoDB/mdbr-leaf-ir",
+  "revision": "b5fe372a656566aca5eae359f0b1d880e48610b1",
+  "license": "Apache-2.0",
+  "modelVersion": "memory-leaf-ir-v2-int8-256",
+  "embeddingDimensions": 768,
+  "storedDimensions": 256,
+  "quantizationType": "INT8_DYNAMIC",
+  "quantizationRange": [
+    -0.3,
+    0.3
+  ],
+  "maxSequenceLength": 512,
+  "sha256": "5ea66d6cd39d56bb0739df0b47adab8479a554585f48804c2fe534d87ec0472c",
+  "conversionToolVersion": "onnxruntime-1.30.0",
+  "conversionTimestamp": 1790924735000,
+  "queryPrefix": "Represent this sentence for searching relevant passages: ",
+  "distanceMetric": "COSINE_SIMILARITY",
+  "hnswParams": {
+    "M": 12,
+    "efConstruction": 64,
+    "efSearch": 32,
+    "topK": 32
+  }
+}

@@ -9,24 +9,31 @@ import java.util.Locale
  * Robust, language-aware target and entity extractor for #Spy Platform Intelligence.
  * Extracts and normalizes handles, usernames, phone numbers, emails, URLs, subreddits,
  * and search queries from multi-lingual natural language sentences (English, Hindi, Hinglish, Roman Hindi).
+ *
+ * Implements deterministic contextual candidate scoring to avoid noise-word collisions (e.g. Hindi "ma", "par", "mein").
  */
 object TargetExtractor {
 
-    // Linguistic noise words and connectors that must never be part of a target identifier
-    private val NOISE_WORDS = setOf(
+    // Linguistic noise words and connectors (Hindi / Hinglish / Roman Hindi / English)
+    private val LINGUISTIC_CONNECTORS_AND_NOISE = setOf(
         // Hindi / Hinglish pronouns & demonstratives
         "is", "iss", "iska", "iski", "iske", "isko", "us", "uss", "uska", "uski", "uske", "usko",
-        "kisi", "kiska", "kiski", "kiske", "yeh", "woh", "in", "inka", "inke", "un", "unka", "unke",
+        "kisi", "kiska", "kiski", "kiske", "yeh", "woh", "ye", "wo", "in", "inka", "inke", "un", "unka", "unke",
+        "mera", "meri", "mere", "tera", "teri", "tere", "apna", "apni", "apne",
+        // CLI flags and modifiers
+        "-u", "-u:", "-u=", "-full", "full", "-f",
         // Hindi / Hinglish connectors & prepositions
-        "par", "per", "pe", "pa", "mein", "me", "se", "ko", "k", "ka", "ki", "ke", "kay", "aur", "ya",
+        "ma", "mein", "me", "mai", "par", "per", "pe", "pa", "se", "ko", "k", "ka", "ki", "ke", "kay", "aur", "ya",
+        "ne", "tak", "bhi", "toh", "to", "hi", "hai", "hain", "tha", "thi", "the", "hoga", "hogi", "hoge",
         // Action verbs & commands (Hindi / Hinglish / English)
         "dhundo", "dhoondo", "khojo", "batao", "bataye", "batana", "dikhao", "dikhaye", "dikhana",
-        "nikalo", "nikal", "nikaliye", "lao", "laao", "check", "karo", "kariye", "search", "find",
-        "fetch", "get", "lookup", "look", "up", "show", "tell", "give", "please", "kripya", "krdo", "kardo",
+        "nikalo", "nikal", "nikaliye", "lao", "laao", "check", "karo", "kariye", "krdo", "kardo",
+        "search", "find", "fetch", "get", "lookup", "look", "up", "show", "tell", "give", "please", "kripya",
+        "chahiye", "kare", "karna", "dekhna", "dekh", "dekho", "bhejo",
         // Subject nouns & entity descriptors
         "account", "khata", "profile", "user", "handle", "channel", "page", "sub", "subreddit",
         "post", "posts", "tweet", "tweets", "feed", "video", "videos", "reel", "reels",
-        "phone", "mobile", "number", "contact", "sampark", "preview", "card",
+        "phone", "mobile", "number", "contact", "sampark", "preview", "card", "overview",
         // Field keywords
         "detail", "details", "info", "information", "data", "bio", "biography", "about",
         "follower", "followers", "following", "subscriber", "subscribers", "sub", "subs",
@@ -34,7 +41,13 @@ object TargetExtractor {
         "analytics", "metric", "metrics", "public", "private", "latest", "top", "new", "all", "business",
         // Platform tokens
         "instagram", "insta", "ig", "youtube", "yt", "reddit", "tiktok", "twitter", "x",
-        "linkedin", "github", "facebook", "fb"
+        "linkedin", "github", "facebook", "fb", "snapchat", "snap", "threads", "pinterest",
+        "spotify", "soundcloud", "telegram", "discord", "gitlab", "quora", "medium"
+    )
+
+    private val SEMANTIC_ENTITY_MARKERS = setOf(
+        "profile", "account", "handle", "user", "username", "id", "channel", "page",
+        "ka", "ki", "ke", "ko", "par", "per", "pe", "mein", "me", "ma", "se"
     )
 
     private val PHONE_PATTERN = Regex("(?:\\+?\\d{1,4}[-\\s.]?)?\\(?\\d{2,5}\\)?[-.\\s]?\\d{3,5}[-.\\s]?\\d{3,6}")
@@ -65,6 +78,7 @@ object TargetExtractor {
 
     /**
      * Extracts and normalizes the target from user input according to the platform and operation.
+     * Uses deterministic contextual scoring.
      */
     fun extract(cleanQuery: String, platform: PlatformType): String {
         val trimmed = cleanQuery.trim()
@@ -88,51 +102,123 @@ object TargetExtractor {
             return normalizeUsername(urlTarget, platform)
         }
 
-        // 4. Explicit @handle syntax (e.g. "@axeel_dubin")
+        // 4. Explicit -u / -U flag syntax (e.g. "-U axeel_dubin", "-u axeel_dubin")
+        val uFlagMatch = Regex("(?:^|\\s)-[uU][:|=]?\\s*([@a-zA-Z0-9._-]+)").find(trimmed)
+        if (uFlagMatch != null) {
+            val handle = uFlagMatch.groupValues[1].removePrefix("@")
+            return normalizeUsername(handle, platform)
+        }
+
+        // 5. Explicit @handle syntax (e.g. "@axeel_dubin", "@nattykamal", "@ma", "@x")
+        // Explicit @handle ALWAYS takes highest priority and preserves short usernames.
         val handleMatch = Regex("@[a-zA-Z0-9._-]+").find(trimmed)
         if (handleMatch != null) {
             val handle = handleMatch.value.removePrefix("@")
             return normalizeUsername(handle, platform)
         }
 
-        // 5. Explicit Subreddit syntax (e.g. "r/android" or "/r/android")
+        // 6. Explicit Subreddit syntax (e.g. "r/android" or "/r/android")
         val subMatch = Regex("(?:^|\\s)r/([a-zA-Z0-9_]+)", RegexOption.IGNORE_CASE).find(trimmed)
         if (subMatch != null) {
             return subMatch.groupValues[1].trim()
         }
 
-        // 6. Linguistic Token Filtering for Hindi / Hinglish / English
-        // Example: "Instagram per axeel_dubin account ka detail nikalo"
-        val rawTokens = trimmed.split(Regex("[\\s,;!?]+")).filter { it.isNotBlank() }
-        val candidateTokens = mutableListOf<String>()
+        // 7. Contextual Token Scoring for Natural Language (Hindi / Hinglish / English)
+        return extractBestTargetCandidate(trimmed, platform)
+    }
 
-        for (token in rawTokens) {
-            val lower = token.lowercase(Locale.ROOT)
+    /**
+     * Contextually scores all tokens in natural language sentences to accurately
+     * resolve the entity username while eliminating linguistic noise words ("ma", "par", "mein", etc.).
+     */
+    private fun extractBestTargetCandidate(query: String, platform: PlatformType): String {
+        val rawTokens = query.split(Regex("[\\s,;!?]+")).filter { it.isNotBlank() }
+        if (rawTokens.isEmpty()) return ""
+
+        data class ScoredCandidate(
+            val token: String,
+            val normalized: String,
+            val score: Int
+        )
+
+        val scoredList = mutableListOf<ScoredCandidate>()
+
+        for (index in rawTokens.indices) {
+            val raw = rawTokens[index]
+            val clean = raw.trim('"', '\'', '`', ':', ',', '.', ';', '(', ')', '[', ']', '{', '}')
+            if (clean.isBlank()) continue
+
+            val lower = clean.lowercase(Locale.ROOT)
             val alphanumericOnly = lower.replace(Regex("[^a-z0-9_.]"), "")
 
-            if (alphanumericOnly.isBlank()) continue
-            if (lower in NOISE_WORDS || alphanumericOnly in NOISE_WORDS) continue
+            var score = 0
+            val isNoise = lower in LINGUISTIC_CONNECTORS_AND_NOISE || alphanumericOnly in LINGUISTIC_CONNECTORS_AND_NOISE
+            val isPlatform = isPlatformKeyword(alphanumericOnly)
 
-            // If token is a platform keyword with punctuation, skip it
-            if (isPlatformKeyword(alphanumericOnly)) continue
-
-            candidateTokens.add(token.trim('"', '\'', '`', ':', ',', '.', ';', '(', ')'))
-        }
-
-        if (candidateTokens.isNotEmpty()) {
-            // For username-centric platforms (Instagram, TikTok, Twitter, GitHub),
-            // find the token that best conforms to platform username syntax
-            if (platform == PlatformType.INSTAGRAM || platform == PlatformType.TIKTOK || platform == PlatformType.TWITTER_X || platform == PlatformType.GITHUB) {
-                val bestUsername = candidateTokens.firstOrNull { isValidUsername(it) }
-                if (bestUsername != null) {
-                    return normalizeUsername(bestUsername, platform)
-                }
+            if (isPlatform) {
+                // Platform name itself cannot be the target
+                continue
             }
 
-            return candidateTokens.joinToString(" ").trim()
+            if (isNoise) {
+                // Heavy penalty for linguistic connectors and common action verbs
+                score -= 100
+            }
+
+            // Syntax validity
+            val validSyntax = isValidUsername(clean)
+            if (validSyntax) {
+                score += 30
+            }
+
+            // Length heuristics for un-prefixed tokens
+            if (clean.length in 3..30) {
+                score += 15
+            } else if (clean.length in 1..2 && isNoise) {
+                score -= 50
+            }
+
+            // Characters bonus: usernames often have underscores, digits, or dots
+            if (clean.contains('_') || clean.any { it.isDigit() }) {
+                score += 15
+            }
+
+            // Contextual adjacency scoring
+            val prevToken = rawTokens.getOrNull(index - 1)?.lowercase(Locale.ROOT)?.replace(Regex("[^a-z0-9]"), "")
+            val prevPrevToken = rawTokens.getOrNull(index - 2)?.lowercase(Locale.ROOT)?.replace(Regex("[^a-z0-9]"), "")
+            val nextToken = rawTokens.getOrNull(index + 1)?.lowercase(Locale.ROOT)?.replace(Regex("[^a-z0-9]"), "")
+
+            // Bonus: follows platform name + connector (e.g. "Instagram ma nattykamal", "Instagram par nattykamal", "Instagram mein nattykamal")
+            if (prevPrevToken != null && isPlatformKeyword(prevPrevToken) && prevToken in setOf("ma", "par", "per", "pe", "mein", "me", "ka", "ki", "ke", "se", "ko")) {
+                score += 50
+            }
+
+            // Bonus: immediately follows platform name (e.g. "Instagram nattykamal")
+            if (prevToken != null && isPlatformKeyword(prevToken)) {
+                score += 45
+            }
+
+            // Bonus: adjacent to semantic entity markers ("profile", "account", "handle", "user", "id", "ka profile")
+            if (nextToken in SEMANTIC_ENTITY_MARKERS || prevToken in SEMANTIC_ENTITY_MARKERS) {
+                score += 35
+            }
+
+            scoredList.add(ScoredCandidate(token = raw, normalized = clean, score = score))
         }
 
-        return trimmed
+        // Sort by highest score
+        val best = scoredList.maxByOrNull { it.score }
+        if (best != null && best.score > 0) {
+            return normalizeUsername(best.normalized, platform)
+        }
+
+        // Fallback: non-noise tokens joined if no single candidate scored positively
+        val nonNoise = scoredList.filter { it.score >= 0 }.map { it.normalized }
+        if (nonNoise.isNotEmpty()) {
+            return normalizeUsername(nonNoise.first(), platform)
+        }
+
+        return ""
     }
 
     private fun isPhoneQuery(text: String): Boolean {
@@ -212,8 +298,8 @@ object TargetExtractor {
     }
 
     /**
-     * Validates whether a token matches the standard Instagram/social username format.
-     * 1-30 chars, letters, numbers, periods, underscores. Cannot contain spaces or consecutive periods.
+     * Validates whether a token matches standard social username syntax.
+     * 1-30 chars, letters, numbers, periods, underscores.
      */
     fun isValidUsername(username: String): Boolean {
         val clean = username.removePrefix("@").trim()
@@ -224,7 +310,9 @@ object TargetExtractor {
     private fun isPlatformKeyword(word: String): Boolean {
         return word in setOf(
             "instagram", "insta", "ig", "youtube", "yt", "reddit",
-            "tiktok", "twitter", "x", "linkedin", "github", "facebook", "fb"
+            "tiktok", "twitter", "x", "linkedin", "github", "facebook", "fb",
+            "snapchat", "snap", "threads", "pinterest", "spotify", "soundcloud",
+            "telegram", "discord", "gitlab", "quora", "medium", "maps", "imdb"
         )
     }
 }

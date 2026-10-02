@@ -44,7 +44,15 @@ enum class MemoryCategory {
     PREFERENCE,
     FACT,
     EPISODIC,
-    WORKFLOW
+    WORKFLOW,
+    IDENTITY,
+    GOAL,
+    PROJECT,
+    INSTRUCTION,
+    RELATIONSHIP,
+    EVENT,
+    CONTACT,
+    CONTEXT
 }
 
 @Serializable
@@ -161,7 +169,27 @@ data class MemoryItem(
     val userId: String = "default_user",
     val scope: MemoryScope = MemoryScope.USER,
     val trustLevel: TrustLevel = TrustLevel.USER_EXPLICIT,
+    val associativeKeys: List<String> = emptyList(),
+    val dedupeKey: String = ""
+)
+
+@Serializable
+data class ExtractedMemoryItem(
+    val type: String = "FACT",
+    val key: String,
+    val value: String,
+    val scope: String = "USER",
+    val confidence: Float = 0.9f,
+    val salience: Float = 0.7f,
+    val temporalIntent: String = "CURRENT",
+    val explicit: Boolean = true,
+    val sourceMessageId: String? = null,
     val associativeKeys: List<String> = emptyList()
+)
+
+@Serializable
+data class SemanticExtractionEnvelope(
+    val memories: List<ExtractedMemoryItem> = emptyList()
 )
 
 @Serializable
@@ -186,4 +214,54 @@ data class MemoryPack(
     val formattedPromptContext: String = "",
     val tokenEstimate: Int = 0,
     val generatedAt: Long = System.currentTimeMillis()
-)
+) {
+    /**
+     * Enforces a strict token ceiling (default 1000 tokens) on injected memory context.
+     * Truncates low-scoring conversation turns and historical structured facts if budget exceeded.
+     */
+    fun withHardTokenCeiling(maxTokens: Int = 1000): MemoryPack {
+        val maxChars = maxTokens * 4
+        if (tokenEstimate <= maxTokens && formattedPromptContext.length <= maxChars) {
+            return this
+        }
+        var truncatedHistorical = historicalFacts
+        var truncatedLedger = relevantLedgerSnippets
+        var truncatedFacts = relevantFacts
+
+        if (truncatedLedger.isNotEmpty()) {
+            truncatedLedger = truncatedLedger.take(1)
+        }
+        if (formattedPromptContext.length > maxChars && truncatedHistorical.isNotEmpty()) {
+            truncatedHistorical = emptyList()
+        }
+        if (formattedPromptContext.length > maxChars && truncatedFacts.size > 4) {
+            truncatedFacts = truncatedFacts.take(4)
+        }
+
+        val boundedText = if (formattedPromptContext.length > maxChars) {
+            formattedPromptContext.take(maxChars).substringBeforeLast('\n') + "\n[Memory context truncated to budget]"
+        } else {
+            formattedPromptContext
+        }
+
+        return this.copy(
+            historicalFacts = truncatedHistorical,
+            relevantLedgerSnippets = truncatedLedger,
+            relevantFacts = truncatedFacts,
+            formattedPromptContext = boundedText,
+            tokenEstimate = boundedText.length / 4
+        )
+    }
+}
+
+@Serializable
+data class MemoryWriteResult(
+    val rawTurnRecorded: Boolean,
+    val structuredMemoriesPersisted: Int = 0,
+    val persistedKeys: Set<String> = emptySet(),
+    val forgottenTargets: Set<String> = emptySet(),
+    val verified: Boolean = false,
+    val failureReason: String? = null
+) {
+    val isSuccess: Boolean get() = (rawTurnRecorded || structuredMemoriesPersisted > 0 || forgottenTargets.isNotEmpty()) && failureReason == null
+}

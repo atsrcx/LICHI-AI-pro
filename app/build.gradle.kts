@@ -126,9 +126,11 @@ dependencies {
 
     val roomVersion = "2.6.1"
     implementation("androidx.webkit:webkit:1.12.0")
+    implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-ktx:$roomVersion")
     ksp("androidx.room:room-compiler:$roomVersion")
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.30.0")
 
     debugImplementation("androidx.compose.ui:ui-tooling")
     debugImplementation("androidx.compose.ui:ui-test-manifest")

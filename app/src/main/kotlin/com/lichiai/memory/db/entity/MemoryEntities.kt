@@ -10,7 +10,8 @@ import androidx.room.PrimaryKey
     tableName = "raw_conversation_ledger",
     indices = [
         Index(value = ["conversationId"]),
-        Index(value = ["timestamp"])
+        Index(value = ["timestamp"]),
+        Index(value = ["userId"])
     ]
 )
 data class ConversationRawLedgerEntity(
@@ -21,7 +22,8 @@ data class ConversationRawLedgerEntity(
     val role: String,
     val verbatimContent: String,
     val timestamp: Long = System.currentTimeMillis(),
-    val metadataJson: String = "{}"
+    val metadataJson: String = "{}",
+    val userId: String = "user_primary_default"
 )
 
 @Entity(tableName = "raw_conversation_ledger_fts")
@@ -69,7 +71,8 @@ data class EntityRecordEntity(
         Index(value = ["sourceEntityId"]),
         Index(value = ["targetEntityId"]),
         Index(value = ["relationType"]),
-        Index(value = ["status"])
+        Index(value = ["status"]),
+        Index(value = ["userId"])
     ]
 )
 data class EntityRelationEntity(
@@ -83,7 +86,8 @@ data class EntityRelationEntity(
     val observedAt: Long = System.currentTimeMillis(),
     val validFrom: Long? = null,
     val validUntil: Long? = null,
-    val status: String = "ACTIVE"
+    val status: String = "ACTIVE",
+    val userId: String = "user_primary_default"
 )
 
 @Entity(
@@ -94,7 +98,8 @@ data class EntityRelationEntity(
         Index(value = ["status"]),
         Index(value = ["conversationId"]),
         Index(value = ["userId"]),
-        Index(value = ["scope"])
+        Index(value = ["scope"]),
+        Index(value = ["dedupeKey"])
     ]
 )
 data class MemoryItemEntity(
@@ -115,15 +120,68 @@ data class MemoryItemEntity(
     val userId: String = "user_primary_default",
     val scope: String = "USER",
     val trustLevel: String = "USER_EXPLICIT",
-    val associativeKeysJson: String = "[]"
+    val associativeKeysJson: String = "[]",
+    val dedupeKey: String = ""
 )
+
+@Entity(
+    tableName = "conversation_semantic_vectors",
+    indices = [
+        Index(value = ["userId"]),
+        Index(value = ["conversationId"]),
+        Index(value = ["status"])
+    ]
+)
+data class ConversationSemanticVectorEntity(
+    @PrimaryKey
+    val turnId: String,
+    val userId: String,
+    val conversationId: String,
+    @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
+    val embeddingInt8: ByteArray,
+    val dimension: Int = 256,
+    val modelVersion: String = "memory-leaf-ir-v2-int8-256",
+    val quantizationVersion: Int = 1,
+    val indexedAt: Long = System.currentTimeMillis(),
+    val status: String = "ACTIVE"
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as ConversationSemanticVectorEntity
+        if (turnId != other.turnId) return false
+        if (userId != other.userId) return false
+        if (conversationId != other.conversationId) return false
+        if (!embeddingInt8.contentEquals(other.embeddingInt8)) return false
+        if (dimension != other.dimension) return false
+        if (modelVersion != other.modelVersion) return false
+        if (quantizationVersion != other.quantizationVersion) return false
+        if (indexedAt != other.indexedAt) return false
+        if (status != other.status) return false
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = turnId.hashCode()
+        result = 31 * result + userId.hashCode()
+        result = 31 * result + conversationId.hashCode()
+        result = 31 * result + embeddingInt8.contentHashCode()
+        result = 31 * result + dimension
+        result = 31 * result + modelVersion.hashCode()
+        result = 31 * result + quantizationVersion
+        result = 31 * result + indexedAt.hashCode()
+        result = 31 * result + status.hashCode()
+        return result
+    }
+}
 
 @Entity(
     tableName = "memory_tombstones",
     indices = [
         Index(value = ["targetIdentifier"]),
         Index(value = ["targetType"]),
-        Index(value = ["scopeConversationId"])
+        Index(value = ["scopeConversationId"]),
+        Index(value = ["userId"])
     ]
 )
 data class TombstoneRecordEntity(
@@ -133,5 +191,62 @@ data class TombstoneRecordEntity(
     val targetIdentifier: String,
     val reason: String = "USER_REQUEST_FORGET",
     val createdAt: Long = System.currentTimeMillis(),
-    val scopeConversationId: String? = null
+    val scopeConversationId: String? = null,
+    val userId: String = "user_primary_default"
 )
+
+@Entity(
+    tableName = "memory_semantic_vectors",
+    indices = [
+        Index(value = ["status"]),
+        Index(value = ["modelVersion"])
+    ]
+)
+data class MemorySemanticVectorEntity(
+    @PrimaryKey
+    val memoryId: String,
+    @ColumnInfo(typeAffinity = ColumnInfo.BLOB)
+    val embeddingInt8: ByteArray,
+    val dimension: Int = 256,
+    val modelVersion: String = "memory-leaf-ir-v2-int8-256",
+    val quantizationVersion: Int = 1,
+    val indexedAt: Long = System.currentTimeMillis(),
+    val status: String = "ACTIVE"
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (javaClass != other?.javaClass) return false
+        other as MemorySemanticVectorEntity
+        if (memoryId != other.memoryId) return false
+        if (!embeddingInt8.contentEquals(other.embeddingInt8)) return false
+        if (dimension != other.dimension) return false
+        if (modelVersion != other.modelVersion) return false
+        if (quantizationVersion != other.quantizationVersion) return false
+        if (indexedAt != other.indexedAt) return false
+        if (status != other.status) return false
+        return true
+    }
+
+    override fun hashCode(): Int {
+        var result = memoryId.hashCode()
+        result = 31 * result + embeddingInt8.contentHashCode()
+        result = 31 * result + dimension
+        result = 31 * result + modelVersion.hashCode()
+        result = 31 * result + quantizationVersion
+        result = 31 * result + indexedAt.hashCode()
+        result = 31 * result + status.hashCode()
+        return result
+    }
+}
+
+@Entity(tableName = "memory_items_fts")
+@Fts4(contentEntity = MemoryItemEntity::class)
+data class MemoryItemFts(
+    @ColumnInfo(name = "rowid")
+    @PrimaryKey
+    val rowid: Int = 0,
+    val key: String,
+    val value: String,
+    val associativeKeysJson: String
+)
+

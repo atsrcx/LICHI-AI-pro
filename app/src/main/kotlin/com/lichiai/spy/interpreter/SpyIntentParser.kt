@@ -1,43 +1,63 @@
 package com.lichiai.spy.interpreter
 
 import com.lichiai.spy.core.PlatformType
+import com.lichiai.spy.core.SpyLookupMode
 import com.lichiai.spy.core.SpyOperation
+import com.lichiai.spy.core.SpyPlatformRef
 import com.lichiai.spy.core.SpyTask
 import com.lichiai.spy.core.TargetType
+import com.lichiai.spy.discovery.PlatformCapabilityInferencer
 import com.lichiai.spy.model.PlatformCatalog
 import java.util.Locale
 
 /**
  * Parses user input queries following the `#Spy` trigger into structured [SpyTask] objects.
- * Supports English, Hindi, Hinglish, Roman Hindi patterns.
+ * Supports flags:
+ *  - `-U <username>` or `-u <username>`
+ *  - `-full` or `-FULL` (activates FULL lookup mode)
+ * Supports dynamic unknown platforms and multi-lingual query structures.
  */
 object SpyIntentParser {
 
-    fun parse(cleanQuery: String, requestId: String = "", messageId: String = ""): SpyTask {
-        val lower = cleanQuery.lowercase(Locale.ROOT)
+    private val FULL_FLAG_REGEX = Regex("(?:^|\\s)(?i)-full\\b")
 
-        val phoneTarget = TargetExtractor.extractPhoneNumber(cleanQuery)
-        val emailTarget = TargetExtractor.extractEmail(cleanQuery)
+    fun parse(cleanQuery: String, requestId: String = "", messageId: String = ""): SpyTask {
+        val hasFullFlag = FULL_FLAG_REGEX.containsMatchIn(cleanQuery)
+        val lookupMode = if (hasFullFlag) SpyLookupMode.FULL else SpyLookupMode.SINGLE
+
+        // Strip the -full flag so it doesn't pollute target extraction
+        val queryWithoutFull = cleanQuery.replace(FULL_FLAG_REGEX, " ").trim()
+        val lower = queryWithoutFull.lowercase(Locale.ROOT)
+
+        val phoneTarget = TargetExtractor.extractPhoneNumber(queryWithoutFull)
+        val emailTarget = TargetExtractor.extractEmail(queryWithoutFull)
+
+        val explicitPlatform = detectPlatform(lower)
 
         val targetType = when {
             emailTarget != null -> TargetType.EMAIL
-            phoneTarget != null -> TargetType.PHONE_NUMBER
-            cleanQuery.contains("http://") || cleanQuery.contains("https://") -> TargetType.URL
-            cleanQuery.contains("r/") -> TargetType.SUBREDDIT
+            phoneTarget != null && (explicitPlatform == null || isPhoneFocused(lower)) -> TargetType.PHONE_NUMBER
+            queryWithoutFull.contains("http://") || queryWithoutFull.contains("https://") -> TargetType.URL
+            queryWithoutFull.contains("r/") -> TargetType.SUBREDDIT
             else -> TargetType.HANDLE_OR_USERNAME
         }
 
-        // 1. Detect platform
-        val explicitPlatform = detectPlatform(lower)
-        val platform = if (explicitPlatform != null) {
-            explicitPlatform
+        // 1. Resolve Platform & Dynamic Reference
+        val (platform, dynamicRef) = if (explicitPlatform != null) {
+            explicitPlatform to PlatformCapabilityInferencer.toPlatformRef(explicitPlatform.id)
         } else if (targetType == TargetType.PHONE_NUMBER || targetType == TargetType.EMAIL) {
-            PlatformType.UNKNOWN
+            PlatformType.UNKNOWN to null
         } else {
-            PlatformType.GENERIC_WEB
+            // Check dynamic platform name before target (e.g. "Bluesky axeel_dubin", "Facebook -U user")
+            val dynamicName = detectDynamicPlatform(lower)
+            if (dynamicName != null) {
+                PlatformType.GENERIC_WEB to PlatformCapabilityInferencer.toPlatformRef(dynamicName)
+            } else {
+                PlatformType.GENERIC_WEB to null
+            }
         }
 
-        // 2. Detect operation
+        // 2. Resolve Operation
         val operation = if (lower.contains("preview") || lower.contains("profile preview")) {
             SpyOperation.PROFILE_PREVIEW
         } else if (targetType == TargetType.EMAIL) {
@@ -48,23 +68,25 @@ object SpyIntentParser {
             detectOperation(lower)
         }
 
-        // 3. Extract target
+        // 3. Extract Target using deterministic extractor
         val target = when (targetType) {
             TargetType.EMAIL -> emailTarget ?: ""
             TargetType.PHONE_NUMBER -> phoneTarget ?: ""
-            else -> TargetExtractor.extract(cleanQuery, platform)
+            else -> TargetExtractor.extract(queryWithoutFull, platform)
         }
 
-        // 4. Extract requested fields or specific intents
+        // 4. Extract requested fields
         val fields = extractRequestedFields(lower)
 
         // 5. Detect preview requested
-        val previewRequested = lower.contains("preview") || lower.contains("overview") || lower.contains("summary") || lower.contains("details") || true
+        val previewRequested = lower.contains("preview") || lower.contains("overview") || lower.contains("summary") || lower.contains("details")
 
         return SpyTask(
             requestId = requestId,
             messageId = messageId,
             platform = platform,
+            dynamicPlatformRef = dynamicRef,
+            lookupMode = lookupMode,
             operation = operation,
             target = target,
             targetType = targetType,
@@ -75,17 +97,21 @@ object SpyIntentParser {
         )
     }
 
+    private fun isPhoneFocused(lower: String): Boolean {
+        return lower.contains("phone") || lower.contains("mobile") || lower.contains("number") ||
+               lower.contains("contact") || lower.contains("sampark") || lower.contains("call")
+    }
+
     private fun detectPlatform(lower: String): PlatformType? {
-        // Direct matching via PlatformCatalog aliases
         val catalogMatch = PlatformCatalog.findByAlias(lower)
         if (catalogMatch != null) {
             return catalogMatch.platformType
         }
 
         return when {
-            lower.contains("instagram") || lower.contains("insta ") || lower.contains("insta:") -> PlatformType.INSTAGRAM
+            lower.contains("instagram") || lower.contains("insta ") || lower.contains("insta:") || lower.contains("insta.") -> PlatformType.INSTAGRAM
             lower.contains("youtube shorts") || lower.contains("yt shorts") -> PlatformType.YOUTUBE_SHORTS
-            lower.contains("youtube") || lower.contains("yt ") || lower.contains("yt:") -> PlatformType.YOUTUBE
+            lower.contains("youtube") || lower.contains("yt ") || lower.contains("yt:") || lower.contains("yt.") -> PlatformType.YOUTUBE
             lower.contains("reddit") || lower.contains("subreddit") || lower.contains("r/") -> PlatformType.REDDIT
             lower.contains("tiktok") -> PlatformType.TIKTOK
             lower.contains("threads") -> PlatformType.THREADS
@@ -107,6 +133,17 @@ object SpyIntentParser {
             lower.contains("website") || lower.contains("site") || lower.contains("web ") || lower.contains("online") -> PlatformType.GENERIC_WEB
             else -> null
         }
+    }
+
+    private fun detectDynamicPlatform(lower: String): String? {
+        val tokens = lower.split(Regex("[\\s,;:]+")).filter { it.isNotBlank() }
+        for (token in tokens) {
+            val clean = token.trim('-', '_')
+            if (clean in setOf("bluesky", "bsky", "mastodon", "patreon", "twitch", "vimeo", "tumblr", "weibo", "line")) {
+                return clean
+            }
+        }
+        return null
     }
 
     private fun detectOperation(lower: String): SpyOperation {

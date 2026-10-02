@@ -234,11 +234,12 @@ class BrowserIntelligencePlatformTest {
 
     @Test
     fun testTypedBrowserActions_AllTypesDeclared() {
-        val openAction = TypedBrowserAction.OpenURL("https://example.com")
-        val tapAction = TypedBrowserAction.TapElement("search_input_1")
-        val typeAction = TypedBrowserAction.TypeText("search_input_1", "Jetpack Compose", submit = true)
-        val waitAction = TypedBrowserAction.WaitForElement("submit_button", timeoutMs = 2000L)
-        val doneAction = TypedBrowserAction.Done("Task completed")
+        val genId = java.util.UUID.randomUUID().toString()
+        val openAction = TypedBrowserAction.OpenURL("https://example.com", generationId = genId)
+        val tapAction = TypedBrowserAction.TapElement("search_input_1", generationId = genId)
+        val typeAction = TypedBrowserAction.TypeText("search_input_1", "Jetpack Compose", submit = true, generationId = genId)
+        val waitAction = TypedBrowserAction.WaitForElement("submit_button", timeoutMs = 2000L, generationId = genId)
+        val doneAction = TypedBrowserAction.Done("Task completed", generationId = genId)
 
         assertEquals("https://example.com", openAction.url)
         assertEquals("search_input_1", tapAction.targetIdOrIndex)
@@ -249,13 +250,14 @@ class BrowserIntelligencePlatformTest {
 
     @Test
     fun testAutonomyState_PauseAndResumeTracking() {
+        val genId = java.util.UUID.randomUUID().toString()
         val state = AutonomyLoopState(
             taskId = "task_test_101",
             userGoal = "Login and view dashboard",
             plannedActions = mutableListOf(
-                TypedBrowserAction.OpenURL("https://example.com/login"),
-                TypedBrowserAction.TypeText("user_input", "user@example.com"),
-                TypedBrowserAction.TypeText("pass_input", "secret")
+                TypedBrowserAction.OpenURL("https://example.com/login", generationId = genId),
+                TypedBrowserAction.TypeText("user_input", "user@example.com", generationId = genId),
+                TypedBrowserAction.TypeText("pass_input", "secret", generationId = genId)
             )
         )
 

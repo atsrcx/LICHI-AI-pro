@@ -42,6 +42,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
@@ -49,13 +50,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.graphics.SolidColor
-import androidx.compose.ui.graphics.drawscope.DrawScope
-import androidx.compose.ui.graphics.drawscope.Fill
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -104,9 +101,25 @@ object LichiVisualTokens {
     val CardLanguagesFg = Color(0xFFDB2777)
     val CardLanguagesIcon = Color(0xFFF43F5E)
 
+    // Dynamic Theme Helpers
+    val UserBubbleBg: Color
+        @Composable
+        @ReadOnlyComposable
+        get() = if (MaterialTheme.colorScheme.background.red < 0.2f) Color(0xFF282545) else Color(0xFFEDE9FE)
+
+    val UserBubbleText: Color
+        @Composable
+        @ReadOnlyComposable
+        get() = if (MaterialTheme.colorScheme.background.red < 0.2f) Color(0xFFF5F3FF) else Color(0xFF1E1B4B)
+
+    val SurfaceBorder: Color
+        @Composable
+        @ReadOnlyComposable
+        get() = MaterialTheme.colorScheme.outline.copy(alpha = 0.6f)
+
     // Pill Shadows
-    val SoftPillShadow = Color(0x0F000000)
-    val CardElevationShadow = Color(0x0A000000)
+    val SoftPillShadow = Color(0x18000000)
+    val CardElevationShadow = Color(0x12000000)
 }
 
 /**
@@ -120,10 +133,11 @@ fun LichiBrandPill(
 ) {
     Surface(
         shape = RoundedCornerShape(26.dp),
-        color = LichiVisualTokens.SurfaceWhite,
+        color = MaterialTheme.colorScheme.surface,
         shadowElevation = 2.dp,
         modifier = modifier
             .height(44.dp)
+            .border(0.8.dp, LichiVisualTokens.SurfaceBorder, RoundedCornerShape(26.dp))
             .shadow(
                 elevation = 4.dp,
                 shape = RoundedCornerShape(26.dp),
@@ -144,7 +158,7 @@ fun LichiBrandPill(
             Icon(
                 imageVector = Icons.Default.Menu,
                 contentDescription = "Open Navigation Drawer",
-                tint = LichiVisualTokens.TextNavy,
+                tint = MaterialTheme.colorScheme.onSurface,
                 modifier = Modifier.size(20.dp)
             )
             Spacer(Modifier.width(10.dp))
@@ -155,7 +169,7 @@ fun LichiBrandPill(
                     letterSpacing = 0.4.sp,
                     fontSize = 14.5.sp
                 ),
-                color = LichiVisualTokens.TextNavy
+                color = MaterialTheme.colorScheme.onSurface
             )
             Spacer(Modifier.width(8.dp))
             Box(
@@ -183,10 +197,11 @@ fun LichiControlPill(
 ) {
     Surface(
         shape = RoundedCornerShape(26.dp),
-        color = LichiVisualTokens.SurfaceWhite,
+        color = MaterialTheme.colorScheme.surface,
         shadowElevation = 2.dp,
         modifier = modifier
             .height(44.dp)
+            .border(0.8.dp, LichiVisualTokens.SurfaceBorder, RoundedCornerShape(26.dp))
             .shadow(
                 elevation = 4.dp,
                 shape = RoundedCornerShape(26.dp),
@@ -226,7 +241,7 @@ fun LichiControlPill(
                         fontWeight = FontWeight.Medium,
                         fontSize = 12.sp
                     ),
-                    color = LichiVisualTokens.TextNavyMuted,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.widthIn(max = 110.dp)
                 )
                 Spacer(Modifier.width(2.dp))
@@ -244,7 +259,7 @@ fun LichiControlPill(
                     .padding(horizontal = 4.dp)
                     .width(1.dp)
                     .height(18.dp)
-                    .background(Color(0xFFE5E7EB))
+                    .background(MaterialTheme.colorScheme.outlineVariant)
             )
 
             // Globe / Browser Action
@@ -262,7 +277,7 @@ fun LichiControlPill(
                 Icon(
                     imageVector = Icons.Default.Public,
                     contentDescription = "Browser Agent",
-                    tint = LichiVisualTokens.TextNavyMuted,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -284,7 +299,7 @@ fun LichiControlPill(
                 Icon(
                     imageVector = Icons.Default.Headphones,
                     contentDescription = "Voice Mode",
-                    tint = LichiVisualTokens.TextNavyMuted,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(18.dp)
                 )
             }
@@ -306,7 +321,7 @@ fun LichiControlPill(
                 Icon(
                     imageVector = Icons.Default.Edit,
                     contentDescription = "New Conversation",
-                    tint = LichiVisualTokens.TextNavyMuted,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.size(17.dp)
                 )
             }
@@ -325,12 +340,12 @@ fun LichiStatusBadge(
 ) {
     Surface(
         shape = RoundedCornerShape(20.dp),
-        color = LichiVisualTokens.SurfaceWhite,
+        color = MaterialTheme.colorScheme.surface,
         shadowElevation = 1.dp,
         modifier = modifier
             .border(
                 width = 1.dp,
-                color = LichiVisualTokens.BrandPurple.copy(alpha = 0.2f),
+                color = LichiVisualTokens.BrandPurple.copy(alpha = 0.3f),
                 shape = RoundedCornerShape(20.dp)
             )
             .shadow(
@@ -369,7 +384,9 @@ fun LichiStatusBadge(
  */
 @Composable
 fun LichiSparkleLogo(
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    primaryColor: Color = MaterialTheme.colorScheme.onSurface,
+    accentColor: Color = LichiVisualTokens.BrandPurple
 ) {
     androidx.compose.foundation.Canvas(modifier = modifier) {
         val w = size.width
@@ -378,7 +395,7 @@ fun LichiSparkleLogo(
         val cy = h * 0.54f
         val primaryRadius = w * 0.38f
 
-        // Draw primary dark navy 4-pointed sparkle
+        // Draw primary sparkle
         val mainPath = Path().apply {
             moveTo(cx, cy - primaryRadius)
             cubicTo(cx + primaryRadius * 0.08f, cy - primaryRadius * 0.15f, cx + primaryRadius * 0.15f, cy - primaryRadius * 0.08f, cx + primaryRadius, cy)
@@ -387,9 +404,9 @@ fun LichiSparkleLogo(
             cubicTo(cx - primaryRadius * 0.15f, cy - primaryRadius * 0.08f, cx - primaryRadius * 0.08f, cy - primaryRadius * 0.15f, cx, cy - primaryRadius)
             close()
         }
-        drawPath(path = mainPath, color = LichiVisualTokens.TextNavy)
+        drawPath(path = mainPath, color = primaryColor)
 
-        // Draw smaller purple sparkle in the upper right quadrant
+        // Draw smaller accent sparkle in the upper right quadrant
         val scx = w * 0.72f
         val scy = h * 0.32f
         val smallRadius = w * 0.16f
@@ -402,7 +419,7 @@ fun LichiSparkleLogo(
             cubicTo(scx - smallRadius * 0.15f, scy - smallRadius * 0.08f, scx - smallRadius * 0.08f, scy - smallRadius * 0.15f, scx, scy - smallRadius)
             close()
         }
-        drawPath(path = smallPath, color = LichiVisualTokens.BrandPurple)
+        drawPath(path = smallPath, color = accentColor)
     }
 }
 
@@ -436,8 +453,8 @@ fun LichiLogoTile(
                     drawCircle(
                         brush = Brush.radialGradient(
                             colors = listOf(
-                                LichiVisualTokens.BrandPurple.copy(alpha = 0.28f * glowPulse),
-                                LichiVisualTokens.BrandPurpleLight.copy(alpha = 0.12f * glowPulse),
+                                Color(0xFF7C3AED).copy(alpha = 0.28f * glowPulse),
+                                Color(0xFF8B5CF6).copy(alpha = 0.12f * glowPulse),
                                 Color.Transparent
                             ),
                             center = center,
@@ -447,13 +464,14 @@ fun LichiLogoTile(
                 }
         )
 
-        // The White Rounded Tile
+        // The Rounded Tile
         Surface(
             shape = RoundedCornerShape(36.dp),
-            color = LichiVisualTokens.SurfaceWhite,
+            color = MaterialTheme.colorScheme.surface,
             shadowElevation = 3.dp,
             modifier = Modifier
                 .size(108.dp)
+                .border(1.dp, LichiVisualTokens.SurfaceBorder, RoundedCornerShape(36.dp))
                 .shadow(
                     elevation = 8.dp,
                     shape = RoundedCornerShape(36.dp),
@@ -476,11 +494,11 @@ fun LichiLogoTile(
                 .padding(top = 16.dp, end = 16.dp)
                 .size(18.dp)
                 .clip(CircleShape)
-                .background(LichiVisualTokens.SurfaceWhite)
+                .background(MaterialTheme.colorScheme.surface)
                 .padding(2.dp)
                 .clip(CircleShape)
                 .background(LichiVisualTokens.StatusPink)
-                .border(1.5.dp, Color.White, CircleShape)
+                .border(1.5.dp, MaterialTheme.colorScheme.surface, CircleShape)
         )
     }
 }
@@ -501,7 +519,7 @@ fun LichiGreetingHeader(
         val headingText = buildAnnotatedString {
             withStyle(
                 SpanStyle(
-                    color = LichiVisualTokens.TextNavy,
+                    color = MaterialTheme.colorScheme.onBackground,
                     fontWeight = FontWeight.Bold,
                     fontSize = 28.sp,
                     letterSpacing = (-0.5).sp
@@ -535,7 +553,7 @@ fun LichiGreetingHeader(
                 lineHeight = 19.sp,
                 fontWeight = FontWeight.Normal
             ),
-            color = LichiVisualTokens.TextGray,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
             textAlign = TextAlign.Center
         )
     }
@@ -564,10 +582,11 @@ fun LichiSuggestionCard(
 ) {
     Surface(
         shape = RoundedCornerShape(22.dp),
-        color = LichiVisualTokens.SurfaceWhite,
+        color = MaterialTheme.colorScheme.surface,
         shadowElevation = 1.5.dp,
         modifier = modifier
             .fillMaxWidth()
+            .border(0.8.dp, LichiVisualTokens.SurfaceBorder, RoundedCornerShape(22.dp))
             .shadow(
                 elevation = 3.dp,
                 shape = RoundedCornerShape(22.dp),
@@ -623,7 +642,7 @@ fun LichiSuggestionCard(
                         fontWeight = FontWeight.Medium,
                         fontSize = 13.5.sp
                     ),
-                    color = LichiVisualTokens.TextNavy,
+                    color = MaterialTheme.colorScheme.onSurface,
                     maxLines = 2,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -636,7 +655,7 @@ fun LichiSuggestionCard(
                 modifier = Modifier
                     .size(26.dp)
                     .clip(CircleShape)
-                    .background(Color(0xFFF3F4F6).copy(alpha = 0.8f)),
+                    .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f)),
                 contentAlignment = Alignment.Center
             ) {
                 Icon(
@@ -677,7 +696,7 @@ fun LichiCapabilityLine(
         Text(
             text = "Screen Vision",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-            color = LichiVisualTokens.TextGray
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         // Bullet
@@ -698,7 +717,7 @@ fun LichiCapabilityLine(
         Text(
             text = "Live Search",
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-            color = LichiVisualTokens.TextGray
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
 
         // Bullet
@@ -719,7 +738,7 @@ fun LichiCapabilityLine(
         Text(
             text = speedLabel,
             style = MaterialTheme.typography.bodySmall.copy(fontSize = 12.sp),
-            color = LichiVisualTokens.TextGray
+            color = MaterialTheme.colorScheme.onSurfaceVariant
         )
     }
 }
